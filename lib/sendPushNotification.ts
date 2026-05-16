@@ -21,20 +21,27 @@ type SendCustomerMessagePushParams = {
 let configured = false;
 
 function configureWebPush() {
-  if (configured) return;
+  if (configured) return true;
 
   const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
   const privateKey = process.env.VAPID_PRIVATE_KEY;
   const subject = process.env.VAPID_SUBJECT || "mailto:hello@artipilot.com";
 
   if (!publicKey || !privateKey) {
-    throw new Error(
-      "Missing NEXT_PUBLIC_VAPID_PUBLIC_KEY or VAPID_PRIVATE_KEY."
+    console.warn(
+      "Push notifications skipped: missing NEXT_PUBLIC_VAPID_PUBLIC_KEY or VAPID_PRIVATE_KEY."
     );
+    return false;
   }
 
-  webPush.setVapidDetails(subject, publicKey, privateKey);
-  configured = true;
+  try {
+    webPush.setVapidDetails(subject, publicKey, privateKey);
+    configured = true;
+    return true;
+  } catch (error) {
+    console.error("Web push configuration failed:", error);
+    return false;
+  }
 }
 
 function buildPreview(message: string) {
@@ -43,7 +50,6 @@ function buildPreview(message: string) {
     .trim();
 
   if (!clean) return "New customer message";
-
   if (clean.length <= 120) return clean;
 
   return `${clean.slice(0, 120)}...`;
@@ -57,7 +63,11 @@ export async function sendCustomerMessagePushNotification({
   messagePreview,
 }: SendCustomerMessagePushParams) {
   try {
-    configureWebPush();
+    const pushReady = configureWebPush();
+
+    if (!pushReady) {
+      return;
+    }
 
     const { data, error } = await supabaseAdmin
       .from("artipilot_push_subscriptions")
@@ -69,10 +79,21 @@ export async function sendCustomerMessagePushNotification({
       return;
     }
 
-    const subscriptions = (data || []) as PushSubscriptionRow[];
+    const subscriptions = ((data || []) as PushSubscriptionRow[]).filter(
+      (row) =>
+        row?.id &&
+        row?.endpoint &&
+        row?.p256dh &&
+        row?.auth &&
+        row.owner_user_id === ownerUserId &&
+        (!row.workspace_id || row.workspace_id === workspaceId)
+    );
 
     if (subscriptions.length === 0) {
-      console.log("No push subscriptions found for owner:", ownerUserId);
+      console.log("No valid push subscriptions found for owner/workspace:", {
+        ownerUserId,
+        workspaceId,
+      });
       return;
     }
 
@@ -85,9 +106,11 @@ export async function sendCustomerMessagePushNotification({
       body: `${displayName}: ${buildPreview(messagePreview)}`,
       url: `/dashboard/inbox?phone=${encodeURIComponent(customerPhone)}`,
       tag: `artipilot-${workspaceId}-${customerPhone}`,
+      customerPhone,
+      workspaceId,
     });
 
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       subscriptions.map(async (row) => {
         try {
           await webPush.sendNotification(
@@ -100,6 +123,13 @@ export async function sendCustomerMessagePushNotification({
             },
             payload
           );
+
+          console.log("Push notification sent:", {
+            subscriptionId: row.id,
+            ownerUserId,
+            workspaceId,
+            customerPhone,
+          });
         } catch (error) {
           const statusCode = (error as { statusCode?: number })?.statusCode;
 
@@ -110,14 +140,31 @@ export async function sendCustomerMessagePushNotification({
           });
 
           if (statusCode === 404 || statusCode === 410) {
-            await supabaseAdmin
+            const { error: deleteError } = await supabaseAdmin
               .from("artipilot_push_subscriptions")
               .delete()
               .eq("id", row.id);
+
+            if (deleteError) {
+              console.error("Expired push subscription delete error:", {
+                subscriptionId: row.id,
+                error: deleteError,
+              });
+            }
           }
         }
       })
     );
+
+    console.log("Push notification batch finished:", {
+      ownerUserId,
+      workspaceId,
+      customerPhone,
+      totalSubscriptions: subscriptions.length,
+      fulfilled: results.filter((result) => result.status === "fulfilled")
+        .length,
+      rejected: results.filter((result) => result.status === "rejected").length,
+    });
   } catch (error) {
     console.error("sendCustomerMessagePushNotification error:", error);
   }
