@@ -16,7 +16,6 @@ type ArtipilotWorkspace = {
   id: string;
   owner_user_id: string | null;
   selected_plan: string | null;
-  selected_offer: string | null;
   business_name: string | null;
   business_type: string | null;
   main_language: string | null;
@@ -28,7 +27,7 @@ type ArtipilotWorkspace = {
 };
 
 const WORKSPACE_SELECT =
-  "id, owner_user_id, selected_plan, selected_offer, business_name, business_type, main_language, ai_job, business_rules, whatsapp_connected, ai_live, setup_completed";
+  "id, owner_user_id, selected_plan, business_name, business_type, main_language, ai_job, business_rules, whatsapp_connected, ai_live, setup_completed";
 
 const DEFAULT_AI_JOB = `You are the WhatsApp AI assistant for this business.
 
@@ -51,10 +50,6 @@ const DEFAULT_BUSINESS_RULES = `Important business rules:
 - Use the customer's language when possible.
 - Be polite, friendly, and professional.`;
 
-function getDefaultWorkspaceId() {
-  return process.env.ARTIPILOT_WORKSPACE_ID?.trim() || "";
-}
-
 async function getUserFromRequest(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   const token = authHeader?.replace("Bearer ", "").trim();
@@ -72,21 +67,6 @@ async function getUserFromRequest(request: NextRequest) {
   }
 
   return user;
-}
-
-async function loadWorkspaceById(workspaceId: string) {
-  const { data, error } = await supabaseAdmin
-    .from("artipilot_workspaces")
-    .select(WORKSPACE_SELECT)
-    .eq("id", workspaceId)
-    .maybeSingle();
-
-  if (error) {
-    console.error("AI training ENV workspace load error:", error);
-    return null;
-  }
-
-  return data as ArtipilotWorkspace | null;
 }
 
 async function loadLatestWorkspaceByUser(userId: string) {
@@ -112,7 +92,6 @@ async function createWorkspaceForUser(userId: string) {
     .insert({
       owner_user_id: userId,
       selected_plan: "starter",
-      selected_offer: "trial",
       business_name: "",
       business_type: "",
       main_language: "English",
@@ -134,21 +113,6 @@ async function createWorkspaceForUser(userId: string) {
 }
 
 async function getOrCreateWorkspace(userId: string) {
-  const envWorkspaceId = getDefaultWorkspaceId();
-
-  if (envWorkspaceId) {
-    const envWorkspace = await loadWorkspaceById(envWorkspaceId);
-
-    if (envWorkspace?.id) {
-      return envWorkspace;
-    }
-
-    console.warn(
-      "ARTIPILOT_WORKSPACE_ID is set but no matching workspace was found:",
-      envWorkspaceId
-    );
-  }
-
   const existingWorkspace = await loadLatestWorkspaceByUser(userId);
 
   if (existingWorkspace?.id) {
@@ -168,18 +132,22 @@ function cleanPayload(body: WorkspacePayload) {
   };
 }
 
+function jsonResponse(body: Record<string, unknown>, status = 200) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+    },
+  });
+}
+
 function errorResponse(message: string, status = 400) {
-  return NextResponse.json(
+  return jsonResponse(
     {
       success: false,
       error: message,
     },
-    {
-      status,
-      headers: {
-        "Cache-Control": "no-store, no-cache, must-revalidate",
-      },
-    }
+    status
   );
 }
 
@@ -195,23 +163,15 @@ export async function GET(request: NextRequest) {
 
     if (!workspace?.id) {
       return errorResponse(
-        "Workspace could not be loaded or created. Check Supabase table columns and service role key.",
+        "Workspace could not be loaded or created. Check Supabase columns and service role key.",
         500
       );
     }
 
-    return NextResponse.json(
-      {
-        success: true,
-        workspace,
-      },
-      {
-        status: 200,
-        headers: {
-          "Cache-Control": "no-store, no-cache, must-revalidate",
-        },
-      }
-    );
+    return jsonResponse({
+      success: true,
+      workspace,
+    });
   } catch (error) {
     console.error("AI training GET error:", error);
 
@@ -234,7 +194,7 @@ export async function POST(request: NextRequest) {
 
     if (!workspace?.id) {
       return errorResponse(
-        "Workspace could not be loaded or created. Check Supabase table columns and service role key.",
+        "Workspace could not be loaded or created. Check Supabase columns and service role key.",
         500
       );
     }
@@ -278,18 +238,10 @@ export async function POST(request: NextRequest) {
       return errorResponse(error.message || "Could not save AI training.", 500);
     }
 
-    return NextResponse.json(
-      {
-        success: true,
-        workspace: data,
-      },
-      {
-        status: 200,
-        headers: {
-          "Cache-Control": "no-store, no-cache, must-revalidate",
-        },
-      }
-    );
+    return jsonResponse({
+      success: true,
+      workspace: data,
+    });
   } catch (error) {
     console.error("AI training POST error:", error);
 
