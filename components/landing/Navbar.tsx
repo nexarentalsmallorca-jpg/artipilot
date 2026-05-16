@@ -92,7 +92,7 @@ export default function Navbar() {
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <Link
             href="/dashboard"
-            className="hidden rounded-full border border-white/10 bg-white/[0.04] px-5 py-2.5 text-sm font-black text-white transition hover:border-[#00D4FF]/40 hover:bg-white/[0.08] sm:inline-flex"
+            className="inline-flex rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-xs font-black text-white transition hover:border-[#00D4FF]/40 hover:bg-white/[0.08] sm:px-5 sm:text-sm"
           >
             Login
           </Link>
