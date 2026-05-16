@@ -4,6 +4,7 @@ import {
   generateArtipilotReply,
 } from "@/lib/artipilotAi";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { sendCustomerMessagePushNotification } from "@/lib/sendPushNotification";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -992,6 +993,36 @@ async function saveIncomingMessage({
   return true;
 }
 
+async function sendInboundCustomerPushNotification({
+  workspace,
+  phone,
+  customerName,
+  content,
+}: {
+  workspace: Workspace;
+  phone: string;
+  customerName: string | null;
+  content: string;
+}) {
+  try {
+    await sendCustomerMessagePushNotification({
+      workspaceId: workspace.id,
+      ownerUserId: workspace.owner_user_id,
+      customerName,
+      customerPhone: phone,
+      messagePreview: content,
+    });
+
+    console.log("✅ Customer push notification sent:", {
+      workspaceId: workspace.id,
+      ownerUserId: workspace.owner_user_id,
+      phone,
+    });
+  } catch (pushError) {
+    console.error("Customer push notification failed:", pushError);
+  }
+}
+
 async function getRecentMessages({
   workspace,
   phone,
@@ -1233,6 +1264,12 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
+
+    console.log("📩 WhatsApp webhook POST received:", {
+      hasEntry: Array.isArray(body?.entry),
+      entryCount: Array.isArray(body?.entry) ? body.entry.length : 0,
+    });
+
     const workspace = await getDefaultWorkspace();
 
     if (!workspace?.id || !workspace?.owner_user_id) {
@@ -1259,6 +1296,13 @@ export async function POST(req: NextRequest) {
         const incomingMessages: WhatsAppMessage[] = value?.messages || [];
         const incomingContacts: WhatsAppContact[] = value?.contacts || [];
         const statuses: WhatsAppStatus[] = value?.statuses || [];
+
+        console.log("📦 WhatsApp webhook change parsed:", {
+          messages: incomingMessages.length,
+          contacts: incomingContacts.length,
+          statuses: statuses.length,
+          phoneNumberId: value?.metadata?.phone_number_id || null,
+        });
 
         if (statuses.length > 0) {
           for (const status of statuses) {
@@ -1348,11 +1392,11 @@ export async function POST(req: NextRequest) {
             savedContact.conversation_status === "blocked" ||
             savedContact.is_blocked === true
           ) {
-            console.log("Blocked contact message saved but no reply sent:", {
+            console.log("Blocked contact message will be saved without reply:", {
               phone,
             });
 
-            await saveIncomingMessage({
+            const blockedIncomingSaved = await saveIncomingMessage({
               workspace,
               phone,
               message,
@@ -1362,6 +1406,21 @@ export async function POST(req: NextRequest) {
               rawPayload: body,
               extras,
             });
+
+            if (blockedIncomingSaved) {
+              await sendInboundCustomerPushNotification({
+                workspace,
+                phone,
+                customerName,
+                content,
+              });
+
+              console.log("✅ Blocked contact inbound message saved:", {
+                phone,
+                messageId: message.id || null,
+                messageType,
+              });
+            }
 
             continue;
           }
@@ -1378,8 +1437,20 @@ export async function POST(req: NextRequest) {
           });
 
           if (!incomingSaved) {
+            console.error("Incoming customer message was not saved:", {
+              phone,
+              messageId: message.id || null,
+              messageType,
+            });
             continue;
           }
+
+          await sendInboundCustomerPushNotification({
+            workspace,
+            phone,
+            customerName,
+            content,
+          });
 
           console.log("✅ Incoming WhatsApp message saved:", {
             phone,
