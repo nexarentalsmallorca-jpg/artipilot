@@ -38,11 +38,12 @@ export default function PushNotificationBox({
   compact = false,
 }: PushNotificationBoxProps) {
   const [supported, setSupported] = useState(false);
-  const [permission, setPermission] = useState<NotificationPermission | "unknown">(
-    "unknown"
-  );
+  const [permission, setPermission] = useState<
+    NotificationPermission | "unknown"
+  >("unknown");
   const [subscribed, setSubscribed] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [testing, setTesting] = useState(false);
   const [notice, setNotice] = useState("");
 
@@ -58,6 +59,10 @@ export default function PushNotificationBox({
   const secondaryButtonClass = isDark
     ? "rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-black text-[#CBD5E1] transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
     : "rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-2 text-xs font-black text-[#334155] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50";
+
+  const dangerButtonClass = isDark
+    ? "rounded-full border border-red-400/20 bg-red-500/10 px-4 py-2 text-xs font-black text-red-200 transition hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+    : "rounded-full border border-red-100 bg-red-50 px-4 py-2 text-xs font-black text-red-600 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50";
 
   const getAuthHeaders = useCallback(async (): Promise<Record<string, string>> => {
     const {
@@ -105,77 +110,100 @@ export default function PushNotificationBox({
     void refreshStatus();
   }, [refreshStatus]);
 
+  async function registerServiceWorker() {
+    const registration = await navigator.serviceWorker.register("/sw.js", {
+      scope: "/",
+      updateViaCache: "none",
+    });
+
+    try {
+      await registration.update();
+    } catch (error) {
+      console.warn("Service worker update check failed:", error);
+    }
+
+    await navigator.serviceWorker.ready;
+
+    return registration;
+  }
+
+  async function saveSubscriptionToServer(subscription: PushSubscription) {
+    const authHeaders = await getAuthHeaders();
+
+    const res = await fetch("/api/notifications/subscribe", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders,
+      },
+      body: JSON.stringify({
+        subscription: subscription.toJSON(),
+      }),
+    });
+
+    const data = await res.json().catch(() => null);
+
+    if (!res.ok || !data?.success) {
+      throw new Error(data?.error || "Could not save notification subscription.");
+    }
+
+    return data;
+  }
+
+  async function getOrCreateSubscription() {
+    if (!isBrowserSupported()) {
+      throw new Error(
+        "This browser does not support web push notifications. On iPhone, open Artipilot from the Home Screen shortcut."
+      );
+    }
+
+    if (!window.isSecureContext) {
+      throw new Error("Notifications only work on HTTPS domains.");
+    }
+
+    const permissionResult = await Notification.requestPermission();
+    setPermission(permissionResult);
+
+    if (permissionResult !== "granted") {
+      throw new Error(
+        "Notifications were not allowed. Enable them from your browser/site settings."
+      );
+    }
+
+    const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+
+    if (!publicKey) {
+      throw new Error("NEXT_PUBLIC_VAPID_PUBLIC_KEY is missing.");
+    }
+
+    const registration = await registerServiceWorker();
+
+    let subscription = await registration.pushManager.getSubscription();
+
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+    }
+
+    return subscription;
+  }
+
   async function enableNotifications() {
     try {
       setLoading(true);
       setNotice("");
 
-      if (!isBrowserSupported()) {
-        setNotice(
-          "This browser does not support web push notifications. On iPhone, open Artipilot from the Home Screen shortcut."
-        );
-        return;
-      }
-
-      if (!window.isSecureContext) {
-        setNotice("Notifications only work on HTTPS domains, not insecure pages.");
-        return;
-      }
-
-      const permissionResult = await Notification.requestPermission();
-      setPermission(permissionResult);
-
-      if (permissionResult !== "granted") {
-        setNotice(
-          "Notifications were not allowed. Enable them from your browser/site settings."
-        );
-        return;
-      }
-
-      const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-
-      if (!publicKey) {
-        setNotice("NEXT_PUBLIC_VAPID_PUBLIC_KEY is missing.");
-        return;
-      }
-
-      const registration = await navigator.serviceWorker.register("/sw.js", {
-        scope: "/",
-      });
-
-      await navigator.serviceWorker.ready;
-
-      let subscription = await registration.pushManager.getSubscription();
-
-      if (!subscription) {
-        subscription = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(publicKey),
-        });
-      }
-
-      const authHeaders = await getAuthHeaders();
-
-      const res = await fetch("/api/notifications/subscribe", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...authHeaders,
-        },
-        body: JSON.stringify({
-          subscription: subscription.toJSON(),
-        }),
-      });
-
-      const data = await res.json().catch(() => null);
-
-      if (!res.ok || !data?.success) {
-        setNotice(data?.error || "Could not save notification subscription.");
-        return;
-      }
+      const subscription = await getOrCreateSubscription();
+      const data = await saveSubscriptionToServer(subscription);
 
       setSubscribed(true);
-      setNotice("Notifications enabled on this device.");
+      setNotice(
+        data?.workspaceId
+          ? `Notifications enabled and saved for this device.`
+          : "Notifications enabled on this device."
+      );
     } catch (error) {
       console.error("Enable notifications error:", error);
       setNotice(
@@ -185,6 +213,73 @@ export default function PushNotificationBox({
       );
     } finally {
       setLoading(false);
+      void refreshStatus();
+    }
+  }
+
+  async function syncDeviceSubscription() {
+    try {
+      setSyncing(true);
+      setNotice("");
+
+      const subscription = await getOrCreateSubscription();
+      const data = await saveSubscriptionToServer(subscription);
+
+      setSubscribed(true);
+      setNotice(
+        data?.workspaceId
+          ? `Device synced successfully. Workspace: ${String(
+              data.workspaceId
+            ).slice(0, 8)}...`
+          : "Device synced successfully."
+      );
+    } catch (error) {
+      console.error("Sync notification subscription error:", error);
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Could not sync this device."
+      );
+    } finally {
+      setSyncing(false);
+      void refreshStatus();
+    }
+  }
+
+  async function resetDeviceSubscription() {
+    try {
+      setSyncing(true);
+      setNotice("");
+
+      if (!isBrowserSupported()) {
+        setNotice("This browser does not support web push notifications.");
+        return;
+      }
+
+      const registration =
+        (await navigator.serviceWorker.getRegistration("/")) ||
+        (await registerServiceWorker());
+
+      const existingSubscription =
+        await registration.pushManager.getSubscription();
+
+      if (existingSubscription) {
+        await existingSubscription.unsubscribe();
+      }
+
+      setSubscribed(false);
+      setNotice(
+        "Device notification subscription reset. Now click Enable / Sync again."
+      );
+    } catch (error) {
+      console.error("Reset notification subscription error:", error);
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Could not reset this device subscription."
+      );
+    } finally {
+      setSyncing(false);
       void refreshStatus();
     }
   }
@@ -211,7 +306,14 @@ export default function PushNotificationBox({
         return;
       }
 
-      setNotice("Test notification sent. Check your phone/computer.");
+      setNotice(
+        data?.workspaceId
+          ? `Test sent for workspace ${String(data.workspaceId).slice(
+              0,
+              8
+            )}... Check your phone/computer.`
+          : "Test notification sent. Check your phone/computer."
+      );
     } catch (error) {
       console.error("Test notification error:", error);
       setNotice(
@@ -243,7 +345,16 @@ export default function PushNotificationBox({
             </p>
           </div>
 
-          {subscribed ? (
+          <div className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              onClick={syncDeviceSubscription}
+              disabled={syncing || loading}
+              className={secondaryButtonClass}
+            >
+              {syncing ? "Syncing..." : "Sync"}
+            </button>
+
             <button
               type="button"
               onClick={sendTestNotification}
@@ -252,16 +363,7 @@ export default function PushNotificationBox({
             >
               {testing ? "Testing..." : "Test"}
             </button>
-          ) : (
-            <button
-              type="button"
-              onClick={enableNotifications}
-              disabled={loading}
-              className={buttonClass}
-            >
-              {loading ? "Enabling..." : "Enable"}
-            </button>
-          )}
+          </div>
         </div>
 
         {notice ? (
@@ -289,7 +391,7 @@ export default function PushNotificationBox({
           <button
             type="button"
             onClick={enableNotifications}
-            disabled={loading || (permission === "granted" && subscribed)}
+            disabled={loading}
             className={buttonClass}
           >
             {loading
@@ -301,11 +403,29 @@ export default function PushNotificationBox({
 
           <button
             type="button"
+            onClick={syncDeviceSubscription}
+            disabled={syncing || loading}
+            className={secondaryButtonClass}
+          >
+            {syncing ? "Syncing..." : "Repair / Sync"}
+          </button>
+
+          <button
+            type="button"
             onClick={sendTestNotification}
-            disabled={testing || !subscribed}
+            disabled={testing}
             className={secondaryButtonClass}
           >
             {testing ? "Testing..." : "Test"}
+          </button>
+
+          <button
+            type="button"
+            onClick={resetDeviceSubscription}
+            disabled={syncing || loading}
+            className={dangerButtonClass}
+          >
+            Reset device
           </button>
         </div>
       </div>
