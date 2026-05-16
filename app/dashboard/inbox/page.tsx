@@ -3,7 +3,6 @@
 import Image from "next/image";
 import Link from "next/link";
 import {
-  ChangeEvent,
   KeyboardEvent,
   useCallback,
   useEffect,
@@ -60,6 +59,23 @@ type Message = {
   delivery_updated_at?: string | null;
   delivery_error?: unknown;
 
+  media_id?: string | null;
+  media_url?: string | null;
+  media_mime_type?: string | null;
+  media_filename?: string | null;
+  media_size?: number | null;
+  media_storage_path?: string | null;
+
+  latitude?: number | null;
+  longitude?: number | null;
+  location_name?: string | null;
+  location_address?: string | null;
+
+  link_url?: string | null;
+
+  translated_text?: string | null;
+  translated_language?: string | null;
+
   status?: "sent" | "delivered" | "read" | null;
 };
 
@@ -69,11 +85,15 @@ type InboxData = {
   error?: string;
 };
 
+type TranslationResult = {
+  translatedText: string;
+  detectedLanguage: string;
+  targetLanguage: string;
+};
+
 type ThemeMode = "light" | "dark";
 type SortMode = "priority" | "newest" | "unread" | "human" | "pinned" | "closed";
 type DateFilter = "all" | "today" | "week" | "month";
-type ProfileMode = "user" | "customer";
-
 type IconName =
   | "home"
   | "whatsapp"
@@ -84,8 +104,6 @@ type IconName =
   | "sun"
   | "moon"
   | "search"
-  | "user"
-  | "close"
   | "send"
   | "attachment"
   | "emoji"
@@ -96,14 +114,14 @@ type IconName =
   | "bell"
   | "trash"
   | "block"
-  | "eye"
   | "check"
   | "warning"
-  | "chevron"
   | "profile"
   | "calendar"
   | "filter"
-  | "back";
+  | "back"
+  | "translate"
+  | "close";
 
 const navItems = [
   { label: "Dashboard", href: "/dashboard", icon: "home" as IconName },
@@ -144,13 +162,35 @@ const attentionKeywords = [
   "puncture",
 ];
 
+const translationLanguages = [
+  "English",
+  "Spanish",
+  "German",
+  "French",
+  "Italian",
+  "Portuguese",
+];
+
 function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
+function cleanPhone(phone: string) {
+  return String(phone || "").replace(/[^\d+]/g, "");
+}
+
+function normalizePhoneForCompare(phone: string) {
+  return String(phone || "").replace(/[^\d]/g, "");
+}
+
+function getInitial(name?: string | null, phone?: string) {
+  if (name && name.trim()) return name.trim().charAt(0).toUpperCase();
+  if (phone) return phone.slice(-2);
+  return "?";
+}
+
 function formatTime(dateString?: string | null) {
   if (!dateString) return "";
-
   try {
     return new Intl.DateTimeFormat("en", {
       hour: "2-digit",
@@ -163,7 +203,6 @@ function formatTime(dateString?: string | null) {
 
 function formatDateTime(dateString?: string | null) {
   if (!dateString) return "";
-
   try {
     return new Intl.DateTimeFormat("en", {
       day: "2-digit",
@@ -174,27 +213,6 @@ function formatDateTime(dateString?: string | null) {
   } catch {
     return "";
   }
-}
-
-function getInitial(name?: string | null, phone?: string) {
-  if (name && name.trim()) return name.trim().charAt(0).toUpperCase();
-  if (phone) return phone.slice(-2);
-  return "?";
-}
-
-function cleanPhone(phone: string) {
-  return String(phone || "").replace(/[^\d+]/g, "");
-}
-
-function normalizePhoneForCompare(phone: string) {
-  return String(phone || "").replace(/[^\d]/g, "");
-}
-
-function getMessageOwner(message: Message) {
-  if (message.role === "assistant") return "Nero AI";
-  if (message.role === "manual") return "Manual";
-  if (message.role === "system") return "System";
-  return "Customer";
 }
 
 function isInsideDateFilter(dateString: string | null | undefined, filter: DateFilter) {
@@ -220,6 +238,13 @@ function isInsideDateFilter(dateString: string | null | undefined, filter: DateF
   return true;
 }
 
+function getMessageOwner(message: Message) {
+  if (message.role === "assistant") return "Nero AI";
+  if (message.role === "manual") return "Manual";
+  if (message.role === "system") return "System";
+  return "Customer";
+}
+
 function getMessageStatus(message: Message) {
   return message.delivery_status || message.status || (message.direction === "outbound" ? "sent" : "received");
 }
@@ -229,17 +254,9 @@ function messageStatusTicks(message: Message) {
 
   const status = getMessageStatus(message);
 
-  if (status === "read") {
-    return <span className="text-[#2187FF]">✓✓</span>;
-  }
-
-  if (status === "delivered") {
-    return <span>✓✓</span>;
-  }
-
-  if (status === "failed") {
-    return <span className="text-red-500">!</span>;
-  }
+  if (status === "read") return <span className="text-[#2187FF]">✓✓</span>;
+  if (status === "delivered") return <span>✓✓</span>;
+  if (status === "failed") return <span className="text-red-500">!</span>;
 
   return <span>✓</span>;
 }
@@ -279,7 +296,6 @@ function Icon({ name, className = "" }: { name: IconName; className?: string }) 
     return (
       <svg className={common} viewBox="0 0 24 24" fill="none">
         <path d="M9.5 4.5A3 3 0 0 0 6.5 7.4 3.6 3.6 0 0 0 4.5 13.5 3.2 3.2 0 0 0 9 18h.5V4.5ZM14.5 4.5a3 3 0 0 1 3 2.9 3.6 3.6 0 0 1 2 6.1 3.2 3.2 0 0 1-4.5 4.5h-.5V4.5Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-        <path d="M9.5 9h-2M14.5 9h2M9.5 13H7M14.5 13H17" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
       </svg>
     );
   }
@@ -288,7 +304,6 @@ function Icon({ name, className = "" }: { name: IconName; className?: string }) 
     return (
       <svg className={common} viewBox="0 0 24 24" fill="none">
         <path d="M4 13 6.2 6.8A1.5 1.5 0 0 1 7.6 5.8h8.8a1.5 1.5 0 0 1 1.4 1L20 13v5.2A1.5 1.5 0 0 1 18.5 20h-13A1.5 1.5 0 0 1 4 18.2V13Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-        <path d="M4 13h4l1.2 2h5.6l1.2-2h4" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
       </svg>
     );
   }
@@ -333,23 +348,6 @@ function Icon({ name, className = "" }: { name: IconName; className?: string }) 
       <svg className={common} viewBox="0 0 24 24" fill="none">
         <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
         <path d="m16 16 4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      </svg>
-    );
-  }
-
-  if (name === "user" || name === "profile") {
-    return (
-      <svg className={common} viewBox="0 0 24 24" fill="none">
-        <circle cx="12" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.8" />
-        <path d="M5.5 19a6.5 6.5 0 0 1 13 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      </svg>
-    );
-  }
-
-  if (name === "close") {
-    return (
-      <svg className={common} viewBox="0 0 24 24" fill="none">
-        <path d="m6 6 12 12M18 6 6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
       </svg>
     );
   }
@@ -443,15 +441,6 @@ function Icon({ name, className = "" }: { name: IconName; className?: string }) 
     );
   }
 
-  if (name === "eye") {
-    return (
-      <svg className={common} viewBox="0 0 24 24" fill="none">
-        <path d="M3.5 12s3-5.5 8.5-5.5S20.5 12 20.5 12s-3 5.5-8.5 5.5S3.5 12 3.5 12Z" stroke="currentColor" strokeWidth="1.8" />
-        <circle cx="12" cy="12" r="2.5" stroke="currentColor" strokeWidth="1.8" />
-      </svg>
-    );
-  }
-
   if (name === "check") {
     return (
       <svg className={common} viewBox="0 0 24 24" fill="none">
@@ -469,10 +458,11 @@ function Icon({ name, className = "" }: { name: IconName; className?: string }) 
     );
   }
 
-  if (name === "chevron") {
+  if (name === "profile") {
     return (
       <svg className={common} viewBox="0 0 24 24" fill="none">
-        <path d="m8 10 4 4 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        <circle cx="12" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.8" />
+        <path d="M5.5 19a6.5 6.5 0 0 1 13 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
       </svg>
     );
   }
@@ -502,7 +492,272 @@ function Icon({ name, className = "" }: { name: IconName; className?: string }) 
     );
   }
 
+  if (name === "translate") {
+    return (
+      <svg className={common} viewBox="0 0 24 24" fill="none">
+        <path d="M4 5h9M8.5 3v2M10.8 5c-.7 3.9-2.7 6.9-6.3 9M6.3 8.8c1.2 2.2 2.9 3.9 5 5.1M14 19l4-9 4 9M15.4 16h5.2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+
+  if (name === "close") {
+    return (
+      <svg className={common} viewBox="0 0 24 24" fill="none">
+        <path d="m6 6 12 12M18 6 6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
   return null;
+}
+
+function MessageMedia({
+  message,
+  isDark,
+  mutedTextClass,
+}: {
+  message: Message;
+  isDark: boolean;
+  mutedTextClass: string;
+}) {
+  const mediaUrl = message.media_url || null;
+  const mimeType = String(message.media_mime_type || "").toLowerCase();
+  const messageType = String(message.message_type || "").toLowerCase();
+
+  const isImage =
+    Boolean(mediaUrl) &&
+    (messageType === "image" ||
+      mimeType.startsWith("image/") ||
+      /\.(jpg|jpeg|png|webp|gif)$/i.test(mediaUrl || ""));
+
+  const isVideo =
+    Boolean(mediaUrl) &&
+    (messageType === "video" ||
+      mimeType.startsWith("video/") ||
+      /\.(mp4|mov|webm)$/i.test(mediaUrl || ""));
+
+  const isAudio =
+    Boolean(mediaUrl) &&
+    (messageType === "audio" ||
+      mimeType.startsWith("audio/") ||
+      /\.(ogg|mp3|wav|m4a)$/i.test(mediaUrl || ""));
+
+  const isDocument =
+    Boolean(mediaUrl) &&
+    (messageType === "document" ||
+      mimeType.includes("pdf") ||
+      mimeType.includes("word") ||
+      mimeType.includes("excel") ||
+      mimeType.includes("spreadsheet") ||
+      /\.(pdf|doc|docx|xls|xlsx|txt)$/i.test(mediaUrl || ""));
+
+  const hasLocation =
+    typeof message.latitude === "number" && typeof message.longitude === "number";
+
+  const mapUrl = hasLocation
+    ? `https://www.google.com/maps?q=${message.latitude},${message.longitude}`
+    : null;
+
+  return (
+    <div className="space-y-2">
+      {isImage && mediaUrl ? (
+        <a href={mediaUrl} target="_blank" rel="noopener noreferrer" className="block overflow-hidden rounded-2xl border border-black/10 bg-black/5">
+          <img
+            src={mediaUrl}
+            alt={message.media_filename || "WhatsApp image"}
+            className="max-h-[360px] w-full max-w-[340px] rounded-2xl object-cover"
+            loading="lazy"
+          />
+        </a>
+      ) : null}
+
+      {isVideo && mediaUrl ? (
+        <video src={mediaUrl} controls className="max-h-[360px] w-full max-w-[360px] rounded-2xl" />
+      ) : null}
+
+      {isAudio && mediaUrl ? (
+        <audio src={mediaUrl} controls className="w-full max-w-[320px]" />
+      ) : null}
+
+      {isDocument && mediaUrl ? (
+        <a
+          href={mediaUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={cx(
+            "flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm font-black transition",
+            isDark
+              ? "border-white/10 bg-white/[0.04] text-white hover:bg-white/[0.07]"
+              : "border-[#E2E8F0] bg-[#F8FAFC] text-[#0F172A] hover:bg-white"
+          )}
+        >
+          <Icon name="attachment" />
+          <span className="min-w-0 flex-1 truncate">
+            {message.media_filename || "Open document"}
+          </span>
+        </a>
+      ) : null}
+
+      {hasLocation && mapUrl ? (
+        <a
+          href={mapUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={cx(
+            "block rounded-2xl border px-4 py-3 text-sm font-bold transition",
+            isDark
+              ? "border-white/10 bg-white/[0.04] text-white hover:bg-white/[0.07]"
+              : "border-[#E2E8F0] bg-[#F8FAFC] text-[#0F172A] hover:bg-white"
+          )}
+        >
+          <div className="flex items-center gap-2">
+            <span>📍</span>
+            <span className="font-black">
+              {message.location_name || "Location received"}
+            </span>
+          </div>
+
+          {message.location_address ? (
+            <p className={cx("mt-1 text-xs", mutedTextClass)}>
+              {message.location_address}
+            </p>
+          ) : null}
+
+          <p className="mt-2 text-xs font-black text-[#079566]">
+            Open in Google Maps
+          </p>
+        </a>
+      ) : null}
+    </div>
+  );
+}
+
+function TranslationBox({
+  translation,
+  isDark,
+}: {
+  translation?: TranslationResult;
+  isDark: boolean;
+}) {
+  if (!translation?.translatedText) return null;
+
+  return (
+    <div
+      className={cx(
+        "mt-3 rounded-2xl border px-3 py-2 text-xs",
+        isDark
+          ? "border-[#1F2937] bg-black/20 text-[#CBD5E1]"
+          : "border-[#DCE6F0] bg-[#F8FAFC] text-[#475569]"
+      )}
+    >
+      <div className="flex items-center gap-2 font-black">
+        <Icon name="translate" className="h-3.5 w-3.5" />
+        <span>
+          {translation.detectedLanguage || "Detected language"} →{" "}
+          {translation.targetLanguage || "English"}
+        </span>
+      </div>
+      <p className="mt-1 whitespace-pre-wrap leading-5">
+        {translation.translatedText}
+      </p>
+    </div>
+  );
+}
+
+function MessageBody({
+  message,
+  isDark,
+  mutedTextClass,
+  translation,
+}: {
+  message: Message;
+  isDark: boolean;
+  mutedTextClass: string;
+  translation?: TranslationResult;
+}) {
+  const content = String(message.content || "").trim();
+  const mediaUrl = message.media_url || null;
+  const messageType = String(message.message_type || "").toLowerCase();
+
+  const onlyPlaceholderImage =
+    content === "[Image received]" && Boolean(mediaUrl);
+
+  const onlyPlaceholderVideo =
+    content === "[Video received]" && Boolean(mediaUrl);
+
+  const onlyPlaceholderAudio =
+    content === "[Audio message received]" && Boolean(mediaUrl);
+
+  const shouldHidePlaceholder =
+    onlyPlaceholderImage || onlyPlaceholderVideo || onlyPlaceholderAudio;
+
+  return (
+    <div className="space-y-2">
+      <MessageMedia
+        message={message}
+        isDark={isDark}
+        mutedTextClass={mutedTextClass}
+      />
+
+      {message.link_url ? (
+        <a
+          href={message.link_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block break-all text-sm font-bold text-[#2187FF] underline"
+        >
+          {message.link_url}
+        </a>
+      ) : null}
+
+      {content && !shouldHidePlaceholder ? (
+        <p className="whitespace-pre-wrap break-words">{content}</p>
+      ) : null}
+
+      {!content && !mediaUrl && messageType !== "location" ? (
+        <p className="whitespace-pre-wrap break-words">[Empty message]</p>
+      ) : null}
+
+      {message.direction === "inbound" && message.role === "customer" ? (
+        <TranslationBox translation={translation} isDark={isDark} />
+      ) : null}
+    </div>
+  );
+}
+
+function ContactAvatar({
+  contact,
+  size = 44,
+}: {
+  contact: Contact | null;
+  size?: number;
+}) {
+  const photo = getContactPhoto(contact);
+
+  return (
+    <div
+      className="relative shrink-0 overflow-hidden rounded-full bg-gradient-to-br from-[#22D3EE] to-[#34E7A9] text-sm font-black text-[#05201A]"
+      style={{ height: size, width: size }}
+    >
+      {photo && contact ? (
+        <Image
+          src={photo}
+          alt={contact.name || contact.phone}
+          width={size}
+          height={size}
+          className="h-full w-full object-cover"
+        />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center">
+          {getInitial(contact?.name, contact?.phone)}
+        </div>
+      )}
+
+      {contact ? (
+        <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-[#22C55E]" />
+      ) : null}
+    </div>
+  );
 }
 
 function MobileBottomNav({ isDark }: { isDark: boolean }) {
@@ -570,10 +825,13 @@ export default function InboxPage() {
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [profileMode, setProfileMode] = useState<ProfileMode>("customer");
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [localActionNotice, setLocalActionNotice] = useState("");
+
+  const [translationTarget, setTranslationTarget] = useState("English");
+  const [translations, setTranslations] = useState<Record<string, TranslationResult>>({});
+  const [translatingMap, setTranslatingMap] = useState<Record<string, boolean>>({});
 
   const [localPinnedMap, setLocalPinnedMap] = useState<Record<string, boolean>>({});
   const [localClosedMap, setLocalClosedMap] = useState<Record<string, boolean>>({});
@@ -614,10 +872,10 @@ export default function InboxPage() {
     const savedBlocked = localStorage.getItem("artipilot_inbox_blocked_map");
     const savedMuted = localStorage.getItem("artipilot_inbox_muted_map");
     const savedHandled = localStorage.getItem("artipilot_inbox_human_handled_map");
+    const savedTarget = localStorage.getItem("artipilot_translation_target");
 
-    if (savedTheme === "dark" || savedTheme === "light") {
-      setTheme(savedTheme);
-    }
+    if (savedTheme === "dark" || savedTheme === "light") setTheme(savedTheme);
+    if (savedTarget) setTranslationTarget(savedTarget);
 
     try {
       if (savedPinned) setLocalPinnedMap(JSON.parse(savedPinned));
@@ -634,6 +892,10 @@ export default function InboxPage() {
     localStorage.setItem("artipilot_theme", theme);
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem("artipilot_translation_target", translationTarget);
+  }, [translationTarget]);
 
   useEffect(() => {
     localStorage.setItem("artipilot_inbox_pinned_map", JSON.stringify(localPinnedMap));
@@ -670,7 +932,6 @@ export default function InboxPage() {
     setUserAvatarUrl(avatar);
 
     const token = session?.access_token;
-
     if (!token) return {};
 
     return {
@@ -708,11 +969,7 @@ export default function InboxPage() {
 
   const contactByPhone = useMemo(() => {
     const map = new Map<string, Contact>();
-
-    for (const contact of contacts) {
-      map.set(contact.phone, contact);
-    }
-
+    for (const contact of contacts) map.set(contact.phone, contact);
     return map;
   }, [contacts]);
 
@@ -920,6 +1177,65 @@ export default function InboxPage() {
     [getAuthHeaders]
   );
 
+  async function translateMessage(message: Message, force = false) {
+    const content = String(message.content || "").trim();
+
+    if (!content) return;
+    if (message.direction !== "inbound" || message.role !== "customer") return;
+
+    const key = `${message.id}:${translationTarget}`;
+
+    if (!force && translations[key]) return;
+    if (translatingMap[key]) return;
+
+    try {
+      setTranslatingMap((previous) => ({ ...previous, [key]: true }));
+
+      const authHeaders = await getAuthHeaders();
+
+      const res = await fetch("/api/inbox/translate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders,
+        },
+        body: JSON.stringify({
+          messageId: message.id,
+          text: content,
+          targetLanguage: translationTarget,
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || !data?.translatedText) {
+        return;
+      }
+
+      setTranslations((previous) => ({
+        ...previous,
+        [key]: {
+          translatedText: String(data.translatedText || ""),
+          detectedLanguage: String(data.detectedLanguage || "Unknown language"),
+          targetLanguage: String(data.targetLanguage || translationTarget),
+        },
+      }));
+    } catch (error) {
+      console.error("Translate message error:", error);
+    } finally {
+      setTranslatingMap((previous) => ({ ...previous, [key]: false }));
+    }
+  }
+
+  useEffect(() => {
+    for (const message of selectedMessages) {
+      if (message.direction === "inbound" && message.role === "customer") {
+        void translateMessage(message);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMessages.length, selectedPhone, translationTarget]);
+
   const markChatAsRead = useCallback(
     async (phone: string) => {
       try {
@@ -957,9 +1273,7 @@ export default function InboxPage() {
     setMoreMenuOpen(false);
     setReportOpen(false);
 
-    if (openMobile) {
-      setMobileChatOpen(true);
-    }
+    if (openMobile) setMobileChatOpen(true);
 
     if (Number(contact.unread_count || 0) > 0) {
       await markChatAsRead(contact.phone);
@@ -1349,9 +1663,8 @@ export default function InboxPage() {
     }
   }
 
-  function handleDocumentUpload(event: ChangeEvent<HTMLInputElement>) {
+  function handleDocumentUpload(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-
     if (!file) return;
 
     setLocalActionNotice(
@@ -1361,9 +1674,8 @@ export default function InboxPage() {
     event.target.value = "";
   }
 
-  function handleMediaUpload(event: ChangeEvent<HTMLInputElement>) {
+  function handleMediaUpload(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-
     if (!file) return;
 
     setLocalActionNotice(
@@ -1408,16 +1720,6 @@ export default function InboxPage() {
     setLocalActionNotice("Human alert marked as handled.");
   }
 
-  function openUserProfile() {
-    setProfileMode("user");
-    setProfileOpen(true);
-  }
-
-  function openCustomerProfile() {
-    setProfileMode("customer");
-    setProfileOpen(true);
-  }
-
   useEffect(() => {
     void loadInbox(false);
 
@@ -1456,6 +1758,191 @@ export default function InboxPage() {
   const selectedPinned = selectedContact ? isPinned(selectedContact) : false;
   const selectedClosed = selectedContact ? isClosed(selectedContact) : false;
 
+  function renderContactCard(contact: Contact, mobile = false) {
+    const unread = Number(contact.unread_count || 0);
+    const selected = selectedPhone === contact.phone;
+    const human = needsHumanAttention(contact);
+    const pinned = isPinned(contact);
+    const closed = isClosed(contact);
+    const blocked = isBlocked(contact);
+    const muted = isMuted(contact);
+
+    return (
+      <button
+        key={contact.id || contact.phone}
+        type="button"
+        onClick={() => selectChat(contact, mobile)}
+        className={cx(
+          "mb-2 w-full rounded-2xl border p-3 text-left transition active:scale-[0.99]",
+          selected
+            ? isDark
+              ? "border-[#2DD4A8] bg-[#0F2A23]"
+              : "border-[#A8EACF] bg-[#ECFBF3]"
+            : human
+              ? isDark
+                ? "border-red-500/30 bg-red-950/20 hover:bg-red-950/30"
+                : "border-red-200 bg-red-50 hover:bg-red-100/60"
+              : unread > 0
+                ? isDark
+                  ? "border-[#22D3EE]/25 bg-[#0A1B28] hover:bg-[#0D2434]"
+                  : "border-[#D7EAF8] bg-[#F8FCFF] hover:bg-[#EFF8FF]"
+                : isDark
+                  ? "border-[#1F2937] bg-[#0B111C] hover:bg-[#111827]"
+                  : "border-[#E2E8F0] bg-white hover:bg-[#F8FAFC]"
+        )}
+      >
+        <div className="flex gap-3">
+          <ContactAvatar contact={contact} size={mobile ? 48 : 44} />
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <p className="truncate text-sm font-black">
+                {contact.name || contact.phone}
+              </p>
+
+              {pinned ? <Icon name="pin" className="shrink-0 text-[#F59E0B]" /> : null}
+              {muted ? <Icon name="bell" className="shrink-0 text-[#94A3B8]" /> : null}
+
+              <span className={cx("ml-auto shrink-0 text-xs", mutedTextClass)}>
+                {formatTime(contact.last_message_at)}
+              </span>
+            </div>
+
+            <p
+              className={cx(
+                "mt-1 truncate text-sm",
+                unread > 0
+                  ? isDark
+                    ? "font-bold text-white"
+                    : "font-bold text-[#0F172A]"
+                  : mutedTextClass
+              )}
+            >
+              {contact.last_message || "No message"}
+            </p>
+
+            <div className="mt-2 flex items-center gap-2">
+              <p className={cx("min-w-0 flex-1 truncate text-xs", mutedTextClass)}>
+                {contact.phone}
+              </p>
+
+              {unread > 0 ? (
+                <span className="rounded-full bg-[#22D3EE] px-2 py-0.5 text-[10px] font-black text-[#05202A]">
+                  {unread}
+                </span>
+              ) : null}
+
+              {human ? (
+                <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-black text-red-700">
+                  Human
+                </span>
+              ) : null}
+
+              {blocked ? (
+                <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-black text-red-700">
+                  Blocked
+                </span>
+              ) : closed ? (
+                <span className={cx("rounded-full px-2 py-0.5 text-[10px] font-black", isDark ? "bg-white/10 text-[#CBD5E1]" : "bg-[#E2E8F0] text-[#475569]")}>
+                  Closed
+                </span>
+              ) : (
+                <span
+                  className={cx(
+                    "rounded-full px-2 py-0.5 text-[10px] font-black",
+                    contact.ai_enabled === false
+                      ? "bg-[#FFF4E5] text-[#B76A00]"
+                      : "bg-[#E7F8F0] text-[#079566]"
+                  )}
+                >
+                  {contact.ai_enabled === false ? "Manual" : "AI"}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      </button>
+    );
+  }
+
+  function renderMessage(message: Message, compact = false) {
+    const inbound = message.direction === "inbound";
+    const translationKey = `${message.id}:${translationTarget}`;
+    const translation = translations[translationKey];
+
+    return (
+      <div
+        key={message.id}
+        className={cx("flex", inbound ? "justify-start" : "justify-end")}
+      >
+        <div
+          className={cx(
+            compact
+              ? "max-w-[84%] rounded-[18px] px-4 py-3 text-sm leading-6 shadow-sm"
+              : "max-w-[76%] rounded-[20px] px-5 py-4 text-sm leading-6 shadow-sm",
+            inbound
+              ? isDark
+                ? "border border-[#1F2937] bg-[#111827] text-white"
+                : "border border-[#E2E8F0] bg-white text-[#0F172A]"
+              : message.role === "manual"
+                ? "border border-[#F5C26B] bg-[#FFF4E5] text-[#8A4B00]"
+                : message.role === "system"
+                  ? "border border-red-200 bg-red-50 text-red-700"
+                  : "border border-[#A8EACF] bg-[#D8F8E8] text-[#063C2E]"
+          )}
+        >
+          <MessageBody
+            message={message}
+            isDark={isDark}
+            mutedTextClass={mutedTextClass}
+            translation={translation}
+          />
+
+          {inbound && message.role === "customer" ? (
+            <button
+              type="button"
+              onClick={() => translateMessage(message, true)}
+              disabled={Boolean(translatingMap[translationKey])}
+              className={cx(
+                "mt-2 inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-black",
+                isDark
+                  ? "border-white/10 bg-white/[0.04] text-[#CBD5E1]"
+                  : "border-[#E2E8F0] bg-[#F8FAFC] text-[#64748B]"
+              )}
+            >
+              <Icon name="translate" className="h-3 w-3" />
+              {translatingMap[translationKey]
+                ? "Translating..."
+                : `Translate to ${translationTarget}`}
+            </button>
+          ) : null}
+
+          <p
+            className={cx(
+              compact
+                ? "mt-1 flex items-center justify-end gap-1 text-right text-[10px] font-bold"
+                : "mt-2 flex items-center justify-end gap-1 text-right text-[11px] font-bold",
+              inbound
+                ? mutedTextClass
+                : message.role === "manual"
+                  ? "text-[#B76A00]"
+                  : message.role === "system"
+                    ? "text-red-600"
+                    : "text-[#08785A]"
+            )}
+          >
+            <span>
+              {compact
+                ? formatTime(message.created_at)
+                : `${getMessageOwner(message)} · ${formatDateTime(message.created_at)}`}
+            </span>
+            {messageStatusTicks(message)}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   function renderMobileChatList() {
     return (
       <div className={cx("flex h-[100dvh] flex-col pb-24 md:hidden", pageClass)}>
@@ -1487,7 +1974,7 @@ export default function InboxPage() {
 
               <button
                 type="button"
-                onClick={openUserProfile}
+                onClick={() => setProfileOpen(true)}
                 className="relative h-10 w-10 overflow-hidden rounded-full bg-gradient-to-br from-[#20D3EE] to-[#34E7A9] text-sm font-black text-[#05201A]"
               >
                 {userAvatarUrl ? (
@@ -1552,19 +2039,6 @@ export default function InboxPage() {
               </button>
             ))}
           </div>
-
-          {loadError ? (
-            <div
-              className={cx(
-                "mt-3 rounded-2xl border px-4 py-3 text-sm font-bold",
-                isDark
-                  ? "border-red-500/20 bg-red-950/30 text-red-200"
-                  : "border-red-200 bg-red-50 text-red-700"
-              )}
-            >
-              {loadError}
-            </div>
-          ) : null}
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
@@ -1584,120 +2058,7 @@ export default function InboxPage() {
               </p>
             </div>
           ) : (
-            filteredContacts.map((contact) => {
-              const unread = Number(contact.unread_count || 0);
-              const human = needsHumanAttention(contact);
-              const pinned = isPinned(contact);
-              const closed = isClosed(contact);
-              const blocked = isBlocked(contact);
-              const muted = isMuted(contact);
-              const photo = getContactPhoto(contact);
-
-              return (
-                <button
-                  key={contact.id || contact.phone}
-                  type="button"
-                  onClick={() => selectChat(contact, true)}
-                  className={cx(
-                    "mb-2 w-full rounded-[1.4rem] border p-3 text-left transition active:scale-[0.99]",
-                    human
-                      ? isDark
-                        ? "border-red-500/30 bg-red-950/20"
-                        : "border-red-200 bg-red-50"
-                      : unread > 0
-                        ? isDark
-                          ? "border-[#22D3EE]/25 bg-[#0A1B28]"
-                          : "border-[#D7EAF8] bg-[#F8FCFF]"
-                        : isDark
-                          ? "border-[#1F2937] bg-[#101722]"
-                          : "border-[#E2E8F0] bg-white"
-                  )}
-                >
-                  <div className="flex gap-3">
-                    <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-full bg-gradient-to-br from-[#22D3EE] to-[#34E7A9] text-sm font-black text-[#05201A]">
-                      {photo ? (
-                        <Image
-                          src={photo}
-                          alt={contact.name || contact.phone}
-                          width={48}
-                          height={48}
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center">
-                          {getInitial(contact.name, contact.phone)}
-                        </div>
-                      )}
-
-                      <span className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full border-2 border-white bg-[#22C55E]" />
-                    </div>
-
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="truncate text-[15px] font-black">
-                          {contact.name || contact.phone}
-                        </p>
-
-                        {pinned ? <Icon name="pin" className="shrink-0 text-[#F59E0B]" /> : null}
-                        {muted ? <Icon name="bell" className="shrink-0 text-[#94A3B8]" /> : null}
-
-                        <span className={cx("ml-auto shrink-0 text-[11px]", mutedTextClass)}>
-                          {formatTime(contact.last_message_at)}
-                        </span>
-                      </div>
-
-                      <p
-                        className={cx(
-                          "mt-1 truncate text-sm",
-                          unread > 0
-                            ? isDark
-                              ? "font-bold text-white"
-                              : "font-bold text-[#0F172A]"
-                            : mutedTextClass
-                        )}
-                      >
-                        {contact.last_message || "No message"}
-                      </p>
-
-                      <div className="mt-2 flex items-center gap-2">
-                        {human ? (
-                          <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-black text-red-700">
-                            Human attention
-                          </span>
-                        ) : null}
-
-                        {blocked ? (
-                          <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-black text-red-700">
-                            Blocked
-                          </span>
-                        ) : closed ? (
-                          <span className={cx("rounded-full px-2 py-0.5 text-[10px] font-black", isDark ? "bg-white/10 text-[#CBD5E1]" : "bg-[#E2E8F0] text-[#475569]")}>
-                            Closed
-                          </span>
-                        ) : (
-                          <span
-                            className={cx(
-                              "rounded-full px-2 py-0.5 text-[10px] font-black",
-                              contact.ai_enabled === false
-                                ? "bg-[#FFF4E5] text-[#B76A00]"
-                                : "bg-[#E7F8F0] text-[#079566]"
-                            )}
-                          >
-                            {contact.ai_enabled === false ? "Manual" : "AI"}
-                          </span>
-                        )}
-
-                        {unread > 0 ? (
-                          <span className="ml-auto rounded-full bg-[#22D3EE] px-2 py-0.5 text-[10px] font-black text-[#05202A]">
-                            {unread}
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                </button>
-              );
-            })
+            filteredContacts.map((contact) => renderContactCard(contact, true))
           )}
         </div>
 
@@ -1706,16 +2067,18 @@ export default function InboxPage() {
     );
   }
 
-  function renderMobileChat() {
+  function renderChatHeader(mobile = false) {
     return (
-      <div className={cx("flex h-[100dvh] flex-col md:hidden", pageClass)}>
-        <header
-          className={cx(
-            "sticky top-0 z-20 border-b px-3 py-3 backdrop-blur-2xl",
-            isDark ? "border-[#1F2937] bg-[#0B0F17]/95" : "border-[#E2E8F0] bg-white/95"
-          )}
-        >
-          <div className="flex items-center gap-2">
+      <header
+        className={cx(
+          mobile
+            ? "sticky top-0 z-20 border-b px-3 py-3 backdrop-blur-2xl"
+            : "flex h-[72px] shrink-0 items-center justify-between border-b px-5",
+          panelClass
+        )}
+      >
+        <div className="flex w-full items-center gap-2">
+          {mobile ? (
             <button
               type="button"
               onClick={() => {
@@ -1727,156 +2090,230 @@ export default function InboxPage() {
             >
               <Icon name="back" className="h-6 w-6" />
             </button>
+          ) : null}
 
+          <button
+            type="button"
+            onClick={() => selectedContact && setProfileOpen(true)}
+            className="min-w-0 flex flex-1 items-center gap-3 text-left"
+            disabled={!selectedContact}
+          >
+            <ContactAvatar contact={selectedContact} size={mobile ? 40 : 44} />
+
+            <div className="min-w-0">
+              {!mobile ? (
+                <p className={cx("text-xs font-bold", mutedTextClass)}>Selected chat</p>
+              ) : null}
+              <h2 className={cx("truncate font-black", mobile ? "text-sm" : "text-base")}>
+                {selectedContact
+                  ? selectedContact.name || selectedContact.phone
+                  : "No chat selected"}
+              </h2>
+              {selectedContact ? (
+                <p className={cx("truncate text-sm", mutedTextClass)}>
+                  {selectedContact.phone}
+                </p>
+              ) : null}
+            </div>
+          </button>
+
+          {!mobile ? (
+            <>
+              <label
+                className={cx(
+                  "hidden items-center gap-2 rounded-full border px-3 py-2 text-xs font-black xl:flex",
+                  isDark
+                    ? "border-[#1F2937] bg-[#0B111C] text-[#CBD5E1]"
+                    : "border-[#E2E8F0] bg-white text-[#334155]"
+                )}
+              >
+                <Icon name="translate" />
+                <select
+                  value={translationTarget}
+                  onChange={(event) => {
+                    setTranslations({});
+                    setTranslationTarget(event.target.value);
+                  }}
+                  className="bg-transparent outline-none"
+                >
+                  {translationLanguages.map((language) => (
+                    <option key={language} value={language}>
+                      Translate to {language}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <Link
+                href="/dashboard/ai-training"
+                className={cx(
+                  "rounded-full border px-4 py-2 text-sm font-black transition",
+                  isDark
+                    ? "border-[#1F2937] bg-[#0B111C] text-[#CBD5E1] hover:bg-[#111827]"
+                    : "border-[#E2E8F0] bg-white text-[#334155] hover:bg-[#F8FAFC]"
+                )}
+              >
+                AI Training
+              </Link>
+
+              <button
+                type="button"
+                onClick={() => updateAiEnabled(false)}
+                disabled={!selectedContact || aiToggleSaving}
+                className={cx(
+                  "rounded-full border px-4 py-2 text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-50",
+                  !localAiEnabled
+                    ? "border-[#F5C26B] bg-[#FFF4E5] text-[#B76A00]"
+                    : "border-[#F5C26B] bg-[#FFF8ED] text-[#B76A00] hover:bg-[#FFF4E5]"
+                )}
+              >
+                Take over
+              </button>
+
+              <button
+                type="button"
+                onClick={() => updateAiEnabled(true)}
+                disabled={!selectedContact || aiToggleSaving}
+                className={cx(
+                  "rounded-full border px-4 py-2 text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-50",
+                  localAiEnabled
+                    ? "border-[#A8EACF] bg-[#E7F8F0] text-[#079566]"
+                    : isDark
+                      ? "border-[#1F2937] bg-[#0B111C] text-[#CBD5E1] hover:bg-[#111827]"
+                      : "border-[#E2E8F0] bg-white text-[#334155] hover:bg-[#F8FAFC]"
+                )}
+              >
+                Give back to AI
+              </button>
+            </>
+          ) : null}
+
+          <button
+            type="button"
+            onClick={() => selectedContact && togglePinned(selectedContact)}
+            disabled={!selectedContact}
+            className={cx(
+              "flex h-10 w-10 items-center justify-center rounded-full border transition disabled:opacity-50",
+              selectedPinned
+                ? "border-[#F5C26B] bg-[#FFF4E5] text-[#B76A00]"
+                : isDark
+                  ? "border-[#1F2937] bg-[#0B111C] text-[#CBD5E1] hover:bg-[#111827]"
+                  : "border-[#E2E8F0] bg-white text-[#334155] hover:bg-[#F8FAFC]"
+            )}
+          >
+            <Icon name="pin" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMoreMenuOpen((current) => !current)}
+            disabled={!selectedContact}
+            className={cx(
+              "flex h-10 w-10 items-center justify-center rounded-full border transition disabled:opacity-50",
+              isDark
+                ? "border-[#1F2937] bg-[#0B111C] text-[#CBD5E1] hover:bg-[#111827]"
+                : "border-[#E2E8F0] bg-white text-[#334155] hover:bg-[#F8FAFC]"
+            )}
+          >
+            <Icon name="dots" />
+          </button>
+        </div>
+
+        {moreMenuOpen && selectedContact ? (
+          <div
+            className={cx(
+              "absolute right-3 top-14 z-40 w-[230px] rounded-2xl border p-2 shadow-xl",
+              panelClass
+            )}
+          >
             <button
               type="button"
-              onClick={() => selectedContact && openCustomerProfile()}
-              className="min-w-0 flex flex-1 items-center gap-3 text-left"
-              disabled={!selectedContact}
+              onClick={() => {
+                setProfileOpen(true);
+                setMoreMenuOpen(false);
+              }}
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
             >
-              <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full bg-gradient-to-br from-[#22D3EE] to-[#34E7A9] text-sm font-black text-[#05201A]">
-                {getContactPhoto(selectedContact) ? (
-                  <Image
-                    src={String(getContactPhoto(selectedContact))}
-                    alt={selectedContact?.name || selectedContact?.phone || "Customer"}
-                    width={40}
-                    height={40}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex h-full w-full items-center justify-center">
-                    {getInitial(selectedContact?.name, selectedContact?.phone)}
-                  </div>
-                )}
-                {selectedContact ? (
-                  <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-[#22C55E]" />
-                ) : null}
-              </div>
-
-              <div className="min-w-0">
-                <p className="truncate text-sm font-black">
-                  {selectedContact
-                    ? selectedContact.name || selectedContact.phone
-                    : "No chat"}
-                </p>
-                <p className={cx("truncate text-xs", mutedTextClass)}>
-                  {selectedContact?.phone || "Select a chat"}
-                </p>
-              </div>
+              <Icon name="profile" />
+              View contact
             </button>
 
             <button
               type="button"
               onClick={() => selectedContact && togglePinned(selectedContact)}
-              disabled={!selectedContact}
-              className={cx(
-                "flex h-10 w-10 items-center justify-center rounded-full",
-                selectedPinned ? "text-[#F59E0B]" : mutedTextClass
-              )}
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
             >
-              <Icon name="pin" className="h-5 w-5" />
+              <Icon name="pin" />
+              {selectedPinned ? "Unstar chat" : "Star chat"}
             </button>
 
             <button
               type="button"
-              onClick={() => setMoreMenuOpen((current) => !current)}
-              disabled={!selectedContact}
-              className={cx("flex h-10 w-10 items-center justify-center rounded-full", mutedTextClass)}
+              onClick={() =>
+                selectedMuted
+                  ? unmuteContact(selectedContact)
+                  : muteContact(selectedContact, 24)
+              }
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
             >
-              <Icon name="dots" className="h-5 w-5" />
+              <Icon name="bell" />
+              {selectedMuted ? "Unmute" : "Mute 24 hours"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setBlocked(selectedContact, !selectedBlocked)}
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
+            >
+              <Icon name="block" />
+              {selectedBlocked ? "Unblock contact" : "Block contact"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => selectedContact && setClosed(selectedContact, !selectedClosed)}
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
+            >
+              <Icon name="check" />
+              {selectedClosed ? "Reopen chat" : "Close chat"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setReportOpen(true);
+                setMoreMenuOpen(false);
+              }}
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
+            >
+              <Icon name="warning" />
+              Report
+            </button>
+
+            <button
+              type="button"
+              onClick={deleteSelectedChat}
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-black text-red-600 hover:bg-red-50"
+            >
+              <Icon name="trash" />
+              Delete chat
             </button>
           </div>
+        ) : null}
+      </header>
+    );
+  }
 
-          {moreMenuOpen && selectedContact ? (
-            <div
-              className={cx(
-                "absolute right-3 top-14 z-40 w-[240px] rounded-2xl border p-2 shadow-xl",
-                panelClass
-              )}
-            >
-              <button
-                type="button"
-                onClick={() => {
-                  openCustomerProfile();
-                  setMoreMenuOpen(false);
-                }}
-                className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
-              >
-                <Icon name="profile" />
-                View contact
-              </button>
-
-              <button
-                type="button"
-                onClick={() => selectedContact && togglePinned(selectedContact)}
-                className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
-              >
-                <Icon name="pin" />
-                {selectedPinned ? "Unstar chat" : "Star chat"}
-              </button>
-
-              <button
-                type="button"
-                onClick={() =>
-                  selectedMuted
-                    ? unmuteContact(selectedContact)
-                    : muteContact(selectedContact, 24)
-                }
-                className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
-              >
-                <Icon name="bell" />
-                {selectedMuted ? "Unmute" : "Mute 24 hours"}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setBlocked(selectedContact, !selectedBlocked)}
-                className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
-              >
-                <Icon name="block" />
-                {selectedBlocked ? "Unblock contact" : "Block contact"}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => selectedContact && setClosed(selectedContact, !selectedClosed)}
-                className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
-              >
-                <Icon name="check" />
-                {selectedClosed ? "Reopen chat" : "Close chat"}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setReportOpen(true);
-                  setMoreMenuOpen(false);
-                }}
-                className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
-              >
-                <Icon name="warning" />
-                Report
-              </button>
-
-              <button
-                type="button"
-                onClick={deleteSelectedChat}
-                className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-black text-red-600 hover:bg-red-50"
-              >
-                <Icon name="trash" />
-                Delete chat
-              </button>
-            </div>
-          ) : null}
-        </header>
-
+  function renderMessages(compact = false) {
+    return (
+      <>
         {selectedContact && selectedHumanAttention ? (
-          <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs font-bold text-red-700">
-            Human attention needed.
+          <div className="border-b border-red-200 bg-red-50 px-5 py-3 text-sm font-bold text-red-700">
+            This chat needs human attention.
             <button
               type="button"
               onClick={() => markHumanHandled(selectedContact)}
-              className="ml-2 rounded-full border border-red-200 bg-white px-2 py-1 text-[11px] font-black text-red-700"
+              className="ml-3 rounded-full border border-red-200 bg-white px-3 py-1 text-xs font-black text-red-700"
             >
               Mark handled
             </button>
@@ -1884,14 +2321,42 @@ export default function InboxPage() {
         ) : null}
 
         {selectedContact && selectedBlocked ? (
-          <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs font-bold text-red-700">
-            This contact is blocked.
+          <div className="border-b border-red-200 bg-red-50 px-5 py-3 text-sm font-bold text-red-700">
+            This contact is blocked. You cannot send messages until you unblock them.
+          </div>
+        ) : null}
+
+        {compact && selectedContact ? (
+          <div className={cx("border-b px-3 py-2", panelClass)}>
+            <label
+              className={cx(
+                "flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-black",
+                softPanelClass
+              )}
+            >
+              <Icon name="translate" />
+              <select
+                value={translationTarget}
+                onChange={(event) => {
+                  setTranslations({});
+                  setTranslationTarget(event.target.value);
+                }}
+                className={cx("w-full bg-transparent outline-none", isDark ? "text-white" : "text-[#0F172A]")}
+              >
+                {translationLanguages.map((language) => (
+                  <option key={language} value={language}>
+                    Translate to {language}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         ) : null}
 
         <div
           className={cx(
-            "min-h-0 flex-1 overflow-y-auto px-3 py-4",
+            "min-h-0 flex-1 overflow-y-auto",
+            compact ? "px-3 py-4" : "px-6 py-5",
             isDark
               ? "bg-[#090E16]"
               : "bg-[radial-gradient(circle_at_12%_0%,rgba(34,211,238,0.08),transparent_28%),radial-gradient(circle_at_80%_18%,rgba(46,230,168,0.06),transparent_30%),#F7FAFE]"
@@ -1899,8 +2364,15 @@ export default function InboxPage() {
         >
           {!selectedContact ? (
             <div className="flex h-full items-center justify-center">
-              <div className={cx("rounded-[24px] border p-8 text-center shadow-sm", panelClass)}>
-                <p className="text-xl font-black">No chat selected</p>
+              <div className={cx("max-w-md rounded-[24px] border p-8 text-center shadow-sm", panelClass)}>
+                <p className={compact ? "text-xl font-black" : "text-2xl font-black"}>
+                  No chat selected
+                </p>
+                {!compact ? (
+                  <p className={cx("mt-3 text-sm leading-6", mutedTextClass)}>
+                    Choose a chat from the left side to view the conversation.
+                  </p>
+                ) : null}
               </div>
             </div>
           ) : selectedMessages.length === 0 ? (
@@ -1908,86 +2380,123 @@ export default function InboxPage() {
               No messages for this contact yet.
             </div>
           ) : (
-            <div className="flex flex-col gap-3">
-              {selectedMessages.map((message) => {
-                const inbound = message.direction === "inbound";
-
-                return (
-                  <div
-                    key={message.id}
-                    className={cx("flex", inbound ? "justify-start" : "justify-end")}
-                  >
-                    <div
-                      className={cx(
-                        "max-w-[84%] rounded-[18px] px-4 py-3 text-sm leading-6 shadow-sm",
-                        inbound
-                          ? isDark
-                            ? "border border-[#1F2937] bg-[#111827] text-white"
-                            : "border border-[#E2E8F0] bg-white text-[#0F172A]"
-                          : message.role === "manual"
-                            ? "border border-[#F5C26B] bg-[#FFF4E5] text-[#8A4B00]"
-                            : message.role === "system"
-                              ? "border border-red-200 bg-red-50 text-red-700"
-                              : "border border-[#A8EACF] bg-[#D8F8E8] text-[#063C2E]"
-                      )}
-                    >
-                      <p className="whitespace-pre-wrap break-words">
-                        {message.content || "[Empty message]"}
-                      </p>
-
-                      <p
-                        className={cx(
-                          "mt-1 flex items-center justify-end gap-1 text-right text-[10px] font-bold",
-                          inbound
-                            ? mutedTextClass
-                            : message.role === "manual"
-                              ? "text-[#B76A00]"
-                              : message.role === "system"
-                                ? "text-red-600"
-                                : "text-[#08785A]"
-                        )}
-                      >
-                        <span>{formatTime(message.created_at)}</span>
-                        {messageStatusTicks(message)}
-                      </p>
-                    </div>
-                  </div>
-                );
-              })}
-
+            <div className={cx("mx-auto flex flex-col gap-4", compact ? "" : "max-w-5xl")}>
+              {selectedMessages.map((message) => renderMessage(message, compact))}
               <div ref={messagesEndRef} />
             </div>
           )}
         </div>
+      </>
+    );
+  }
 
-        <footer className={cx("shrink-0 border-t p-2", panelClass)}>
-          {sendError ? (
-            <div className="mb-2 rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
-              {sendError}
-            </div>
-          ) : null}
+  function renderComposer(compact = false) {
+    return (
+      <footer className={cx("shrink-0 border-t", compact ? "p-2" : "px-6 py-4", panelClass)}>
+        {sendError ? (
+          <div className="mx-auto mb-3 max-w-5xl rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+            {sendError}
+          </div>
+        ) : null}
 
-          {localActionNotice ? (
-            <div className={cx("mb-2 rounded-2xl border px-3 py-2 text-xs font-bold", softPanelClass)}>
-              {localActionNotice}
+        {localActionNotice ? (
+          <div className={cx("mx-auto mb-3 max-w-5xl rounded-2xl border px-4 py-3 text-sm font-bold", softPanelClass)}>
+            {localActionNotice}
+            <button
+              type="button"
+              onClick={() => setLocalActionNotice("")}
+              className="ml-3 text-xs underline"
+            >
+              hide
+            </button>
+          </div>
+        ) : null}
+
+        <div className={cx("mx-auto max-w-5xl rounded-[22px] border p-3", softPanelClass)}>
+          {!compact ? (
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="relative flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEmojiOpen((current) => !current)}
+                  className={cx("flex h-9 w-9 items-center justify-center rounded-xl transition", isDark ? "bg-[#111827] text-[#CBD5E1]" : "bg-white text-[#64748B]")}
+                >
+                  <Icon name="emoji" />
+                </button>
+
+                {emojiOpen ? (
+                  <div className={cx("absolute bottom-11 left-0 z-30 grid w-[230px] grid-cols-6 gap-2 rounded-2xl border p-3 shadow-xl", panelClass)}>
+                    {quickEmojis.map((emoji) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        onClick={() => handleTyping(`${manualReply}${emoji}`)}
+                        className="rounded-xl p-2 text-lg hover:bg-black/5"
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+
+                <input
+                  ref={documentInputRef}
+                  type="file"
+                  className="hidden"
+                  accept=".pdf,.doc,.docx,.txt,.xls,.xlsx"
+                  onChange={handleDocumentUpload}
+                />
+
+                <input
+                  ref={mediaInputRef}
+                  type="file"
+                  className="hidden"
+                  accept="image/*,video/*"
+                  onChange={handleMediaUpload}
+                />
+
+                <button
+                  type="button"
+                  onClick={() => documentInputRef.current?.click()}
+                  className={cx("flex h-9 w-9 items-center justify-center rounded-xl transition", isDark ? "bg-[#111827] text-[#CBD5E1]" : "bg-white text-[#64748B]")}
+                >
+                  <Icon name="attachment" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => mediaInputRef.current?.click()}
+                  className={cx("flex h-9 w-9 items-center justify-center rounded-xl transition", isDark ? "bg-[#111827] text-[#CBD5E1]" : "bg-white text-[#64748B]")}
+                >
+                  <Icon name="image" />
+                </button>
+              </div>
+
               <button
                 type="button"
-                onClick={() => setLocalActionNotice("")}
-                className="ml-2 underline"
+                onClick={generateAiSuggestion}
+                disabled={!selectedContact}
+                className={cx(
+                  "inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-black transition disabled:cursor-not-allowed disabled:opacity-50",
+                  "border border-[#A8EACF] bg-[#E7F8F0] text-[#079566] hover:bg-[#DDF5EA]"
+                )}
               >
-                hide
+                <Icon name="spark" />
+                AI suggestion
               </button>
             </div>
           ) : null}
 
-          <div className="flex items-end gap-2">
-            <button
-              type="button"
-              onClick={() => setEmojiOpen((current) => !current)}
-              className={cx("flex h-11 w-11 shrink-0 items-center justify-center rounded-full", softPanelClass)}
-            >
-              <Icon name="emoji" />
-            </button>
+          <div className="flex items-end gap-3">
+            {compact ? (
+              <button
+                type="button"
+                onClick={() => setEmojiOpen((current) => !current)}
+                className={cx("flex h-11 w-11 shrink-0 items-center justify-center rounded-full", softPanelClass)}
+              >
+                <Icon name="emoji" />
+              </button>
+            ) : null}
 
             <textarea
               value={manualReply}
@@ -1997,16 +2506,20 @@ export default function InboxPage() {
               rows={1}
               placeholder={
                 selectedBlocked
-                  ? "Blocked..."
+                  ? "This contact is blocked..."
                   : selectedContact
-                    ? "Message..."
-                    : "Select chat..."
+                    ? compact
+                      ? "Message..."
+                      : "Write a manual reply..."
+                    : "Select a chat to reply..."
               }
               className={cx(
-                "max-h-28 min-h-[44px] flex-1 resize-none rounded-[1.4rem] border px-4 py-3 text-sm outline-none transition",
+                compact
+                  ? "max-h-28 min-h-[44px] flex-1 resize-none rounded-[1.4rem] border px-4 py-3 text-sm outline-none transition"
+                  : "max-h-28 min-h-[50px] w-full resize-none rounded-2xl border px-4 py-3 text-sm outline-none transition",
                 isDark
                   ? "border-[#1F2937] bg-[#0B111C] text-white placeholder:text-[#64748B] focus:border-[#2DD4A8]"
-                  : "border-[#E2E8F0] bg-[#F8FAFC] text-[#0F172A] placeholder:text-[#94A3B8] focus:border-[#7EDDBD]",
+                  : "border-[#E2E8F0] bg-white text-[#0F172A] placeholder:text-[#94A3B8] focus:border-[#7EDDBD]",
                 !selectedContact || sending || selectedBlocked
                   ? "cursor-not-allowed opacity-60"
                   : ""
@@ -2017,13 +2530,18 @@ export default function InboxPage() {
               type="button"
               onClick={sendManualReply}
               disabled={!selectedContact || sending || !manualReply.trim() || selectedBlocked}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#22C55E] text-white shadow-lg transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+              className={cx(
+                compact
+                  ? "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#22C55E] text-white shadow-lg transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                  : "inline-flex h-[50px] items-center gap-2 rounded-2xl bg-[#CFF7DF] px-6 font-black text-[#08785A] transition hover:bg-[#B8F0D2] disabled:cursor-not-allowed disabled:opacity-50"
+              )}
             >
               <Icon name="send" className="h-5 w-5" />
+              {!compact ? (sending ? "Sending..." : "Send") : null}
             </button>
           </div>
 
-          {emojiOpen ? (
+          {compact && emojiOpen ? (
             <div className={cx("mt-2 grid grid-cols-6 gap-2 rounded-2xl border p-3", softPanelClass)}>
               {quickEmojis.map((emoji) => (
                 <button
@@ -2037,7 +2555,23 @@ export default function InboxPage() {
               ))}
             </div>
           ) : null}
-        </footer>
+        </div>
+
+        {!compact ? (
+          <p className={cx("mt-3 text-center text-xs", mutedTextClass)}>
+            Manual replies send through your connected WhatsApp Cloud API.
+          </p>
+        ) : null}
+      </footer>
+    );
+  }
+
+  function renderMobileChat() {
+    return (
+      <div className={cx("flex h-[100dvh] flex-col md:hidden", pageClass)}>
+        {renderChatHeader(true)}
+        {renderMessages(true)}
+        {renderComposer(true)}
       </div>
     );
   }
@@ -2147,7 +2681,7 @@ export default function InboxPage() {
 
             <button
               type="button"
-              onClick={openUserProfile}
+              onClick={() => setProfileOpen(true)}
               className={cx(
                 "relative flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition",
                 isDark ? "bg-white/[0.04]" : "bg-[#F1F5F9]",
@@ -2231,12 +2765,7 @@ export default function InboxPage() {
               </div>
 
               <div className="mt-3 grid grid-cols-2 gap-2">
-                <label
-                  className={cx(
-                    "flex items-center gap-2 rounded-2xl border px-3 py-2",
-                    softPanelClass
-                  )}
-                >
+                <label className={cx("flex items-center gap-2 rounded-2xl border px-3 py-2", softPanelClass)}>
                   <Icon name="calendar" className={mutedTextClass} />
                   <select
                     value={dateFilter}
@@ -2253,12 +2782,7 @@ export default function InboxPage() {
                   </select>
                 </label>
 
-                <label
-                  className={cx(
-                    "flex items-center gap-2 rounded-2xl border px-3 py-2",
-                    softPanelClass
-                  )}
-                >
+                <label className={cx("flex items-center gap-2 rounded-2xl border px-3 py-2", softPanelClass)}>
                   <Icon name="filter" className={mutedTextClass} />
                   <select
                     value={sortMode}
@@ -2314,560 +2838,15 @@ export default function InboxPage() {
                   </p>
                 </div>
               ) : (
-                filteredContacts.map((contact) => {
-                  const unread = Number(contact.unread_count || 0);
-                  const selected = selectedPhone === contact.phone;
-                  const human = needsHumanAttention(contact);
-                  const pinned = isPinned(contact);
-                  const closed = isClosed(contact);
-                  const blocked = isBlocked(contact);
-                  const muted = isMuted(contact);
-                  const photo = getContactPhoto(contact);
-
-                  return (
-                    <button
-                      key={contact.id || contact.phone}
-                      type="button"
-                      onClick={() => selectChat(contact)}
-                      className={cx(
-                        "mb-2 w-full rounded-2xl border p-3 text-left transition",
-                        selected
-                          ? isDark
-                            ? "border-[#2DD4A8] bg-[#0F2A23]"
-                            : "border-[#A8EACF] bg-[#ECFBF3]"
-                          : human
-                            ? isDark
-                              ? "border-red-500/30 bg-red-950/20 hover:bg-red-950/30"
-                              : "border-red-200 bg-red-50 hover:bg-red-100/60"
-                            : unread > 0
-                              ? isDark
-                                ? "border-[#22D3EE]/25 bg-[#0A1B28] hover:bg-[#0D2434]"
-                                : "border-[#D7EAF8] bg-[#F8FCFF] hover:bg-[#EFF8FF]"
-                              : isDark
-                                ? "border-[#1F2937] bg-[#0B111C] hover:bg-[#111827]"
-                                : "border-[#E2E8F0] bg-white hover:bg-[#F8FAFC]"
-                      )}
-                    >
-                      <div className="flex gap-3">
-                        <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-full bg-gradient-to-br from-[#22D3EE] to-[#34E7A9] text-sm font-black text-[#05201A]">
-                          {photo ? (
-                            <Image
-                              src={photo}
-                              alt={contact.name || contact.phone}
-                              width={44}
-                              height={44}
-                              className="h-full w-full object-cover"
-                            />
-                          ) : (
-                            <div className="flex h-full w-full items-center justify-center">
-                              {getInitial(contact.name, contact.phone)}
-                            </div>
-                          )}
-                          <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-[#22C55E]" />
-                        </div>
-
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="truncate text-sm font-black">
-                              {contact.name || contact.phone}
-                            </p>
-
-                            {pinned ? <Icon name="pin" className="shrink-0 text-[#F59E0B]" /> : null}
-                            {muted ? <Icon name="bell" className="shrink-0 text-[#94A3B8]" /> : null}
-
-                            <span className={cx("ml-auto shrink-0 text-xs", mutedTextClass)}>
-                              {formatTime(contact.last_message_at)}
-                            </span>
-                          </div>
-
-                          <p
-                            className={cx(
-                              "mt-1 truncate text-sm",
-                              unread > 0
-                                ? isDark
-                                  ? "font-bold text-white"
-                                  : "font-bold text-[#0F172A]"
-                                : mutedTextClass
-                            )}
-                          >
-                            {contact.last_message || "No message"}
-                          </p>
-
-                          <div className="mt-2 flex items-center gap-2">
-                            <p className={cx("min-w-0 flex-1 truncate text-xs", mutedTextClass)}>
-                              {contact.phone}
-                            </p>
-
-                            {unread > 0 ? (
-                              <span className="rounded-full bg-[#22D3EE] px-2 py-0.5 text-[10px] font-black text-[#05202A]">
-                                {unread}
-                              </span>
-                            ) : null}
-
-                            {human ? (
-                              <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-black text-red-700">
-                                Human
-                              </span>
-                            ) : null}
-
-                            {blocked ? (
-                              <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-black text-red-700">
-                                Blocked
-                              </span>
-                            ) : closed ? (
-                              <span className={cx("rounded-full px-2 py-0.5 text-[10px] font-black", isDark ? "bg-white/10 text-[#CBD5E1]" : "bg-[#E2E8F0] text-[#475569]")}>
-                                Closed
-                              </span>
-                            ) : (
-                              <span
-                                className={cx(
-                                  "rounded-full px-2 py-0.5 text-[10px] font-black",
-                                  contact.ai_enabled === false
-                                    ? "bg-[#FFF4E5] text-[#B76A00]"
-                                    : "bg-[#E7F8F0] text-[#079566]"
-                                )}
-                              >
-                                {contact.ai_enabled === false ? "Manual" : "AI"}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })
+                filteredContacts.map((contact) => renderContactCard(contact))
               )}
             </div>
           </div>
 
           <div className="hidden min-w-0 flex-1 flex-col md:flex">
-            <header className={cx("flex h-[72px] shrink-0 items-center justify-between border-b px-5", panelClass)}>
-              <button
-                type="button"
-                onClick={() => selectedContact && openCustomerProfile()}
-                className="min-w-0 flex items-center gap-3 text-left"
-                disabled={!selectedContact}
-              >
-                <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-full bg-gradient-to-br from-[#22D3EE] to-[#34E7A9] text-sm font-black text-[#05201A]">
-                  {getContactPhoto(selectedContact) ? (
-                    <Image
-                      src={String(getContactPhoto(selectedContact))}
-                      alt={selectedContact?.name || selectedContact?.phone || "Customer"}
-                      width={44}
-                      height={44}
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center">
-                      {getInitial(selectedContact?.name, selectedContact?.phone)}
-                    </div>
-                  )}
-                  {selectedContact ? (
-                    <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-[#22C55E]" />
-                  ) : null}
-                </div>
-
-                <div className="min-w-0">
-                  <p className={cx("text-xs font-bold", mutedTextClass)}>Selected chat</p>
-                  <h2 className="truncate text-base font-black">
-                    {selectedContact
-                      ? selectedContact.name || selectedContact.phone
-                      : "No chat selected"}
-                  </h2>
-                  {selectedContact ? (
-                    <p className={cx("truncate text-sm", mutedTextClass)}>
-                      {selectedContact.phone}
-                    </p>
-                  ) : null}
-                </div>
-              </button>
-
-              <div className="relative flex items-center gap-2">
-                <Link
-                  href="/dashboard/ai-training"
-                  className={cx(
-                    "rounded-full border px-4 py-2 text-sm font-black transition",
-                    isDark
-                      ? "border-[#1F2937] bg-[#0B111C] text-[#CBD5E1] hover:bg-[#111827]"
-                      : "border-[#E2E8F0] bg-white text-[#334155] hover:bg-[#F8FAFC]"
-                  )}
-                >
-                  AI Training
-                </Link>
-
-                <button
-                  type="button"
-                  onClick={() => updateAiEnabled(false)}
-                  disabled={!selectedContact || aiToggleSaving}
-                  className={cx(
-                    "rounded-full border px-4 py-2 text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-50",
-                    !localAiEnabled
-                      ? "border-[#F5C26B] bg-[#FFF4E5] text-[#B76A00]"
-                      : "border-[#F5C26B] bg-[#FFF8ED] text-[#B76A00] hover:bg-[#FFF4E5]"
-                  )}
-                >
-                  Take over
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => updateAiEnabled(true)}
-                  disabled={!selectedContact || aiToggleSaving}
-                  className={cx(
-                    "rounded-full border px-4 py-2 text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-50",
-                    localAiEnabled
-                      ? "border-[#A8EACF] bg-[#E7F8F0] text-[#079566]"
-                      : isDark
-                        ? "border-[#1F2937] bg-[#0B111C] text-[#CBD5E1] hover:bg-[#111827]"
-                        : "border-[#E2E8F0] bg-white text-[#334155] hover:bg-[#F8FAFC]"
-                  )}
-                >
-                  Give back to AI
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => selectedContact && togglePinned(selectedContact)}
-                  disabled={!selectedContact}
-                  className={cx(
-                    "flex h-10 w-10 items-center justify-center rounded-full border transition disabled:opacity-50",
-                    selectedPinned
-                      ? "border-[#F5C26B] bg-[#FFF4E5] text-[#B76A00]"
-                      : isDark
-                        ? "border-[#1F2937] bg-[#0B111C] text-[#CBD5E1] hover:bg-[#111827]"
-                        : "border-[#E2E8F0] bg-white text-[#334155] hover:bg-[#F8FAFC]"
-                  )}
-                  title="Star chat"
-                >
-                  <Icon name="pin" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setMoreMenuOpen((current) => !current)}
-                  disabled={!selectedContact}
-                  className={cx(
-                    "flex h-10 w-10 items-center justify-center rounded-full border transition disabled:opacity-50",
-                    isDark
-                      ? "border-[#1F2937] bg-[#0B111C] text-[#CBD5E1] hover:bg-[#111827]"
-                      : "border-[#E2E8F0] bg-white text-[#334155] hover:bg-[#F8FAFC]"
-                  )}
-                >
-                  <Icon name="dots" />
-                </button>
-
-                {moreMenuOpen && selectedContact ? (
-                  <div
-                    className={cx(
-                      "absolute right-0 top-12 z-40 w-[230px] rounded-2xl border p-2 shadow-xl",
-                      panelClass
-                    )}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        openCustomerProfile();
-                        setMoreMenuOpen(false);
-                      }}
-                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
-                    >
-                      <Icon name="profile" />
-                      View contact
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => selectedContact && togglePinned(selectedContact)}
-                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
-                    >
-                      <Icon name="pin" />
-                      {selectedPinned ? "Unstar chat" : "Star chat"}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        selectedMuted
-                          ? unmuteContact(selectedContact)
-                          : muteContact(selectedContact, 24)
-                      }
-                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
-                    >
-                      <Icon name="bell" />
-                      {selectedMuted ? "Unmute" : "Mute 24 hours"}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setBlocked(selectedContact, !selectedBlocked)}
-                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
-                    >
-                      <Icon name="block" />
-                      {selectedBlocked ? "Unblock contact" : "Block contact"}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => selectedContact && setClosed(selectedContact, !selectedClosed)}
-                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
-                    >
-                      <Icon name="check" />
-                      {selectedClosed ? "Reopen chat" : "Close chat"}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setReportOpen(true);
-                        setMoreMenuOpen(false);
-                      }}
-                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-bold hover:bg-black/5"
-                    >
-                      <Icon name="warning" />
-                      Report
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={deleteSelectedChat}
-                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-black text-red-600 hover:bg-red-50"
-                    >
-                      <Icon name="trash" />
-                      Delete chat
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            </header>
-
-            {selectedContact && selectedHumanAttention ? (
-              <div className="border-b border-red-200 bg-red-50 px-5 py-3 text-sm font-bold text-red-700">
-                This chat needs human attention.
-                <button
-                  type="button"
-                  onClick={() => markHumanHandled(selectedContact)}
-                  className="ml-3 rounded-full border border-red-200 bg-white px-3 py-1 text-xs font-black text-red-700"
-                >
-                  Mark handled
-                </button>
-              </div>
-            ) : null}
-
-            {selectedContact && selectedBlocked ? (
-              <div className="border-b border-red-200 bg-red-50 px-5 py-3 text-sm font-bold text-red-700">
-                This contact is blocked. You cannot send messages until you unblock them.
-              </div>
-            ) : null}
-
-            <div
-              className={cx(
-                "min-h-0 flex-1 overflow-y-auto px-6 py-5",
-                isDark
-                  ? "bg-[#090E16]"
-                  : "bg-[radial-gradient(circle_at_12%_0%,rgba(34,211,238,0.08),transparent_28%),radial-gradient(circle_at_80%_18%,rgba(46,230,168,0.06),transparent_30%),#F7FAFE]"
-              )}
-            >
-              {!selectedContact ? (
-                <div className="flex h-full items-center justify-center">
-                  <div className={cx("max-w-md rounded-[24px] border p-8 text-center shadow-sm", panelClass)}>
-                    <p className="text-2xl font-black">No chat selected</p>
-                    <p className={cx("mt-3 text-sm leading-6", mutedTextClass)}>
-                      Choose a chat from the left side to view the conversation.
-                    </p>
-                  </div>
-                </div>
-              ) : selectedMessages.length === 0 ? (
-                <div className={cx("rounded-2xl border p-5 text-sm", softPanelClass, mutedTextClass)}>
-                  No messages for this contact yet.
-                </div>
-              ) : (
-                <div className="mx-auto flex max-w-5xl flex-col gap-4">
-                  {selectedMessages.map((message) => {
-                    const inbound = message.direction === "inbound";
-
-                    return (
-                      <div
-                        key={message.id}
-                        className={cx("flex", inbound ? "justify-start" : "justify-end")}
-                      >
-                        <div
-                          className={cx(
-                            "max-w-[76%] rounded-[20px] px-5 py-4 text-sm leading-6 shadow-sm",
-                            inbound
-                              ? isDark
-                                ? "border border-[#1F2937] bg-[#111827] text-white"
-                                : "border border-[#E2E8F0] bg-white text-[#0F172A]"
-                              : message.role === "manual"
-                                ? "border border-[#F5C26B] bg-[#FFF4E5] text-[#8A4B00]"
-                                : message.role === "system"
-                                  ? "border border-red-200 bg-red-50 text-red-700"
-                                  : "border border-[#A8EACF] bg-[#D8F8E8] text-[#063C2E]"
-                          )}
-                        >
-                          <p className="whitespace-pre-wrap break-words">
-                            {message.content || "[Empty message]"}
-                          </p>
-
-                          <p
-                            className={cx(
-                              "mt-2 flex items-center justify-end gap-1 text-right text-[11px] font-bold",
-                              inbound
-                                ? mutedTextClass
-                                : message.role === "manual"
-                                  ? "text-[#B76A00]"
-                                  : message.role === "system"
-                                    ? "text-red-600"
-                                    : "text-[#08785A]"
-                            )}
-                          >
-                            <span>
-                              {getMessageOwner(message)} · {formatDateTime(message.created_at)}
-                            </span>
-                            {messageStatusTicks(message)}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  <div ref={messagesEndRef} />
-                </div>
-              )}
-            </div>
-
-            <footer className={cx("shrink-0 border-t px-6 py-4", panelClass)}>
-              {sendError ? (
-                <div className="mx-auto mb-3 max-w-5xl rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
-                  {sendError}
-                </div>
-              ) : null}
-
-              {localActionNotice ? (
-                <div className={cx("mx-auto mb-3 max-w-5xl rounded-2xl border px-4 py-3 text-sm font-bold", softPanelClass)}>
-                  {localActionNotice}
-                  <button
-                    type="button"
-                    onClick={() => setLocalActionNotice("")}
-                    className="ml-3 text-xs underline"
-                  >
-                    hide
-                  </button>
-                </div>
-              ) : null}
-
-              <div className={cx("mx-auto max-w-5xl rounded-[22px] border p-3", softPanelClass)}>
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <div className="relative flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setEmojiOpen((current) => !current)}
-                      className={cx("flex h-9 w-9 items-center justify-center rounded-xl transition", isDark ? "bg-[#111827] text-[#CBD5E1]" : "bg-white text-[#64748B]")}
-                    >
-                      <Icon name="emoji" />
-                    </button>
-
-                    {emojiOpen ? (
-                      <div className={cx("absolute bottom-11 left-0 z-30 grid w-[230px] grid-cols-6 gap-2 rounded-2xl border p-3 shadow-xl", panelClass)}>
-                        {quickEmojis.map((emoji) => (
-                          <button
-                            key={emoji}
-                            type="button"
-                            onClick={() => handleTyping(`${manualReply}${emoji}`)}
-                            className="rounded-xl p-2 text-lg hover:bg-black/5"
-                          >
-                            {emoji}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-
-                    <input
-                      ref={documentInputRef}
-                      type="file"
-                      className="hidden"
-                      accept=".pdf,.doc,.docx,.txt,.xls,.xlsx"
-                      onChange={handleDocumentUpload}
-                    />
-
-                    <input
-                      ref={mediaInputRef}
-                      type="file"
-                      className="hidden"
-                      accept="image/*,video/*"
-                      onChange={handleMediaUpload}
-                    />
-
-                    <button
-                      type="button"
-                      onClick={() => documentInputRef.current?.click()}
-                      className={cx("flex h-9 w-9 items-center justify-center rounded-xl transition", isDark ? "bg-[#111827] text-[#CBD5E1]" : "bg-white text-[#64748B]")}
-                    >
-                      <Icon name="attachment" />
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => mediaInputRef.current?.click()}
-                      className={cx("flex h-9 w-9 items-center justify-center rounded-xl transition", isDark ? "bg-[#111827] text-[#CBD5E1]" : "bg-white text-[#64748B]")}
-                    >
-                      <Icon name="image" />
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={generateAiSuggestion}
-                    disabled={!selectedContact}
-                    className={cx(
-                      "inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-black transition disabled:cursor-not-allowed disabled:opacity-50",
-                      "border border-[#A8EACF] bg-[#E7F8F0] text-[#079566] hover:bg-[#DDF5EA]"
-                    )}
-                  >
-                    <Icon name="spark" />
-                    AI suggestion
-                  </button>
-                </div>
-
-                <div className="flex items-end gap-3">
-                  <textarea
-                    value={manualReply}
-                    onChange={(event) => handleTyping(event.target.value)}
-                    onKeyDown={handleTextareaKeyDown}
-                    disabled={!selectedContact || sending || selectedBlocked}
-                    rows={1}
-                    placeholder={
-                      selectedBlocked
-                        ? "This contact is blocked..."
-                        : selectedContact
-                          ? "Write a manual reply..."
-                          : "Select a chat to reply..."
-                    }
-                    className={cx(
-                      "max-h-28 min-h-[50px] w-full resize-none rounded-2xl border px-4 py-3 text-sm outline-none transition",
-                      isDark
-                        ? "border-[#1F2937] bg-[#0B111C] text-white placeholder:text-[#64748B] focus:border-[#2DD4A8]"
-                        : "border-[#E2E8F0] bg-white text-[#0F172A] placeholder:text-[#94A3B8] focus:border-[#7EDDBD]",
-                      !selectedContact || sending || selectedBlocked
-                        ? "cursor-not-allowed opacity-60"
-                        : ""
-                    )}
-                  />
-
-                  <button
-                    type="button"
-                    onClick={sendManualReply}
-                    disabled={!selectedContact || sending || !manualReply.trim() || selectedBlocked}
-                    className="inline-flex h-[50px] items-center gap-2 rounded-2xl bg-[#CFF7DF] px-6 font-black text-[#08785A] transition hover:bg-[#B8F0D2] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <Icon name="send" />
-                    {sending ? "Sending..." : "Send"}
-                  </button>
-                </div>
-              </div>
-
-              <p className={cx("mt-3 text-center text-xs", mutedTextClass)}>
-                Manual replies send through your connected WhatsApp Cloud API.
-              </p>
-            </footer>
+            {renderChatHeader(false)}
+            {renderMessages(false)}
+            {renderComposer(false)}
           </div>
         </section>
       </div>
@@ -2877,7 +2856,7 @@ export default function InboxPage() {
           <div className={cx("w-full max-w-md rounded-[28px] border p-6 shadow-2xl", panelClass)}>
             <div className="flex items-center justify-between">
               <p className="text-lg font-black">
-                {profileMode === "customer" && selectedContact ? "Customer profile" : "Your profile"}
+                {selectedContact ? "Customer profile" : "Your profile"}
               </p>
               <button
                 type="button"
@@ -2890,7 +2869,7 @@ export default function InboxPage() {
 
             <div className="mt-6 flex flex-col items-center text-center">
               <div className="relative h-24 w-24 overflow-hidden rounded-full bg-gradient-to-br from-[#22D3EE] to-[#34E7A9] text-3xl font-black text-[#05201A]">
-                {profileMode === "customer" && selectedContact && getContactPhoto(selectedContact) ? (
+                {selectedContact && getContactPhoto(selectedContact) ? (
                   <Image
                     src={String(getContactPhoto(selectedContact))}
                     alt={selectedContact.name || selectedContact.phone}
@@ -2898,7 +2877,7 @@ export default function InboxPage() {
                     height={96}
                     className="h-full w-full object-cover"
                   />
-                ) : profileMode === "user" && userAvatarUrl ? (
+                ) : userAvatarUrl ? (
                   <Image
                     src={userAvatarUrl}
                     alt="User avatar"
@@ -2908,7 +2887,7 @@ export default function InboxPage() {
                   />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center">
-                    {profileMode === "customer" && selectedContact
+                    {selectedContact
                       ? getInitial(selectedContact.name, selectedContact.phone)
                       : "A"}
                   </div>
@@ -2917,19 +2896,19 @@ export default function InboxPage() {
               </div>
 
               <h3 className="mt-4 text-2xl font-black">
-                {profileMode === "customer" && selectedContact
+                {selectedContact
                   ? selectedContact.name || "Unknown customer"
                   : userEmail || "Workspace user"}
               </h3>
 
               <p className={cx("mt-1 text-sm", mutedTextClass)}>
-                {profileMode === "customer" && selectedContact ? selectedContact.phone : "Online"}
+                {selectedContact ? selectedContact.phone : "Online"}
               </p>
 
               <div className={cx("mt-5 w-full rounded-2xl border p-4 text-left", softPanelClass)}>
                 <p className="text-xs font-black uppercase tracking-[0.14em]">Profile details</p>
                 <p className={cx("mt-3 text-sm leading-6", mutedTextClass)}>
-                  {profileMode === "customer" && selectedContact
+                  {selectedContact
                     ? getContactNote(selectedContact) ||
                       "Meta Cloud API may not provide real profile photo, online status, or customer bio. This panel is ready for the data when available."
                     : "This profile uses your connected Google account picture when Supabase provides it."}
@@ -2955,8 +2934,7 @@ export default function InboxPage() {
             </div>
 
             <p className={cx("mt-3 text-sm leading-6", mutedTextClass)}>
-              Theme is saved for the dashboard base. More customization like chat background,
-              brand colors, and notification sounds can be connected to Settings in the next step.
+              Theme and translation target are saved on this device.
             </p>
 
             <div className="mt-5 grid grid-cols-2 gap-3">
@@ -2990,6 +2968,24 @@ export default function InboxPage() {
                 <p className={cx("mt-1 text-sm", mutedTextClass)}>Better for night usage.</p>
               </button>
             </div>
+
+            <label className={cx("mt-5 flex items-center gap-2 rounded-2xl border px-4 py-3", softPanelClass)}>
+              <Icon name="translate" />
+              <select
+                value={translationTarget}
+                onChange={(event) => {
+                  setTranslations({});
+                  setTranslationTarget(event.target.value);
+                }}
+                className={cx("w-full bg-transparent text-sm font-black outline-none", isDark ? "text-white" : "text-[#0F172A]")}
+              >
+                {translationLanguages.map((language) => (
+                  <option key={language} value={language}>
+                    Auto translate customer messages to {language}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         </div>
       ) : null}
