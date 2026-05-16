@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import PushNotificationBox from "@/components/dashboard/PushNotificationBox";
 
 type Contact = {
   id: string;
@@ -2039,6 +2040,10 @@ export default function InboxPage() {
               </button>
             ))}
           </div>
+
+          <div className="mt-3">
+            <PushNotificationBox isDark={isDark} compact />
+          </div>
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
@@ -2805,6 +2810,10 @@ export default function InboxPage() {
               <div className={cx("mt-3 flex items-center justify-between text-xs", mutedTextClass)}>
                 <span>{filteredContacts.length} chats</span>
                 <span>{humanCount} human alerts · {totalUnread} unread</span>
+              </div>
+
+              <div className="mt-3">
+                <PushNotificationBox isDark={isDark} />
               </div>
 
               {loadError ? (
