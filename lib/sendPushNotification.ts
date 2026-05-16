@@ -72,7 +72,7 @@ export async function sendCustomerMessagePushNotification({
     const { data, error } = await supabaseAdmin
       .from("artipilot_push_subscriptions")
       .select("id, owner_user_id, workspace_id, endpoint, p256dh, auth")
-      .eq("owner_user_id", ownerUserId);
+      .eq("workspace_id", workspaceId);
 
     if (error) {
       console.error("Push subscriptions load error:", error);
@@ -85,14 +85,13 @@ export async function sendCustomerMessagePushNotification({
         row?.endpoint &&
         row?.p256dh &&
         row?.auth &&
-        row.owner_user_id === ownerUserId &&
-        (!row.workspace_id || row.workspace_id === workspaceId)
+        row.workspace_id === workspaceId
     );
 
     if (subscriptions.length === 0) {
-      console.log("No valid push subscriptions found for owner/workspace:", {
-        ownerUserId,
+      console.log("No valid push subscriptions found for workspace:", {
         workspaceId,
+        ownerUserId,
       });
       return;
     }
@@ -126,7 +125,7 @@ export async function sendCustomerMessagePushNotification({
 
           console.log("Push notification sent:", {
             subscriptionId: row.id,
-            ownerUserId,
+            ownerUserId: row.owner_user_id,
             workspaceId,
             customerPhone,
           });

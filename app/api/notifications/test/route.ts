@@ -5,6 +5,11 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type WorkspaceRow = {
+  id: string;
+  owner_user_id: string;
+};
+
 async function getUserFromRequest(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   const token = authHeader?.replace("Bearer ", "").trim();
@@ -24,7 +29,32 @@ async function getUserFromRequest(request: NextRequest) {
   return user;
 }
 
-async function getWorkspace(userId: string) {
+async function getMainWorkspace(userId: string): Promise<WorkspaceRow | null> {
+  const envWorkspaceId = process.env.ARTIPILOT_WORKSPACE_ID;
+
+  if (envWorkspaceId) {
+    const { data, error } = await supabaseAdmin
+      .from("artipilot_workspaces")
+      .select("id, owner_user_id")
+      .eq("id", envWorkspaceId)
+      .maybeSingle();
+
+    if (error) {
+      console.error("Push test ENV workspace error:", error);
+      return null;
+    }
+
+    if (data?.id) {
+      return data as WorkspaceRow;
+    }
+
+    console.error("ARTIPILOT_WORKSPACE_ID was set but workspace was not found:", {
+      envWorkspaceId,
+    });
+
+    return null;
+  }
+
   const { data, error } = await supabaseAdmin
     .from("artipilot_workspaces")
     .select("id, owner_user_id")
@@ -34,11 +64,11 @@ async function getWorkspace(userId: string) {
     .maybeSingle();
 
   if (error) {
-    console.error("Push test workspace error:", error);
+    console.error("Push test user workspace error:", error);
     return null;
   }
 
-  return data || null;
+  return (data as WorkspaceRow | null) || null;
 }
 
 export async function POST(request: NextRequest) {
@@ -52,18 +82,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const workspace = await getWorkspace(user.id);
+    const workspace = await getMainWorkspace(user.id);
 
-    if (!workspace?.id) {
+    if (!workspace?.id || !workspace?.owner_user_id) {
       return NextResponse.json(
-        { success: false, error: "Workspace not found." },
+        {
+          success: false,
+          error:
+            "Main workspace not found. Add ARTIPILOT_WORKSPACE_ID in Vercel or create a workspace.",
+        },
         { status: 404 }
       );
     }
 
     await sendCustomerMessagePushNotification({
       workspaceId: workspace.id,
-      ownerUserId: user.id,
+      ownerUserId: workspace.owner_user_id,
       customerName: "Test Customer",
       customerPhone: "34600000000",
       messagePreview: "This is a test notification from Artipilot.",
@@ -72,6 +106,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       message: "Test notification sent.",
+      workspaceId: workspace.id,
+      ownerUserId: workspace.owner_user_id,
     });
   } catch (error) {
     console.error("Push test route error:", error);
