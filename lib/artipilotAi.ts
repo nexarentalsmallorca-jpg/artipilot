@@ -40,6 +40,9 @@ type OpenAIResponsesApiResult = {
 
 const DEFAULT_MODEL = process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
 
+const SAFE_HANDOVER_REPLY =
+  "I’ll pass this to the team now so they can confirm it properly. They will reply as soon as possible.";
+
 function extractOpenAIText(data: OpenAIResponsesApiResult) {
   if (typeof data.output_text === "string" && data.output_text.trim()) {
     return data.output_text.trim();
@@ -69,7 +72,7 @@ function formatRecentMessages(messages?: ArtipilotChatMessage[]) {
 
   return messages
     .filter((message) => String(message.content || "").trim())
-    .slice(-18)
+    .slice(-24)
     .map((message) => {
       const speaker =
         message.role === "customer"
@@ -80,7 +83,10 @@ function formatRecentMessages(messages?: ArtipilotChatMessage[]) {
               ? "Human team"
               : "System";
 
-      return `${speaker}: ${String(message.content || "").trim()}`;
+      const direction = message.direction === "inbound" ? "incoming" : "outgoing";
+      const time = message.created_at ? ` at ${message.created_at}` : "";
+
+      return `${speaker} (${direction}${time}): ${String(message.content || "").trim()}`;
     })
     .join("\n");
 }
@@ -195,20 +201,19 @@ function detectKnownName({
   return "";
 }
 
+function normalizeText(text: string) {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 function isDirectNameQuestion(message: string) {
-  const clean = message.trim().toLowerCase().replace(/\s+/g, " ");
+  const clean = normalizeText(message).replace(/[¿?!.]/g, "");
 
   return [
     "who am i",
-    "who am i?",
     "who i am",
-    "who i am?",
     "do you know my name",
-    "do you know my name?",
     "what is my name",
-    "what is my name?",
     "tell me my name",
-    "tell me my name?",
   ].includes(clean);
 }
 
@@ -229,8 +234,8 @@ function isSimpleGreeting(message: string) {
   ].includes(clean);
 }
 
-function customerAskedForHuman(message: string) {
-  const clean = message.toLowerCase();
+export function customerAskedForHuman(message: string) {
+  const clean = normalizeText(message);
 
   const phrases = [
     "human",
@@ -253,7 +258,7 @@ function customerAskedForHuman(message: string) {
 }
 
 function asksPrivateOwnerInfo(message: string) {
-  const clean = message.toLowerCase();
+  const clean = normalizeText(message);
 
   const phrases = [
     "who is the owner",
@@ -274,7 +279,7 @@ function asksPrivateOwnerInfo(message: string) {
 }
 
 function asksAboutAmLicense(message: string) {
-  const clean = message.toLowerCase().replace(/\s+/g, " ").trim();
+  const clean = normalizeText(message);
 
   return (
     clean.includes("am licence") ||
@@ -283,9 +288,7 @@ function asksAboutAmLicense(message: string) {
     clean.includes("license am") ||
     clean === "am" ||
     clean === "what is am" ||
-    clean === "what is am?" ||
     clean === "who is am" ||
-    clean === "who is am?" ||
     clean.includes(" i have am ") ||
     clean.includes("i have an am")
   );
@@ -303,6 +306,14 @@ function removeEmptyLines(text: string) {
     .trim();
 }
 
+function cleanAiOutput(text: string) {
+  return removeEmptyLines(text)
+    .replace(/^nero\s*:\s*/i, "")
+    .replace(/^assistant\s*:\s*/i, "")
+    .replace(/^reply\s*:\s*/i, "")
+    .trim();
+}
+
 function buildSafeFallback({
   message,
   knownCustomerName,
@@ -311,7 +322,7 @@ function buildSafeFallback({
   knownCustomerName: string;
 }) {
   if (customerAskedForHuman(message)) {
-    return "Of course, I’ll pass you to the NEXA Rentals team now. They will reply as soon as possible.";
+    return "Of course, I’ll pass you to the team now. They will reply as soon as possible.";
   }
 
   if (asksPrivateOwnerInfo(message)) {
@@ -341,6 +352,133 @@ function buildSafeFallback({
     : "Thank you. Could you please tell me what you need help with?";
 }
 
+export function shouldMarkHumanAttentionFromText(text: string) {
+  const clean = normalizeText(text);
+
+  const phrases = [
+    "pass you to the team",
+    "pass this to the team",
+    "team will confirm",
+    "team will reply",
+    "team can confirm",
+    "team to confirm",
+    "forward your booking details",
+    "forward this to our team",
+    "i’ll forward",
+    "i will forward",
+    "human team",
+    "real person",
+    "manager",
+    "not covered",
+    "not sure",
+    "i can’t confirm",
+    "i cannot confirm",
+    "i don’t have enough information",
+    "i do not have enough information",
+    "please wait for the team",
+  ];
+
+  return phrases.some((phrase) => clean.includes(phrase));
+}
+
+function hasStrongBusinessBrain(input: ArtipilotAiInput) {
+  const combined = `${input.aiJob || ""}\n${input.businessRules || ""}`.trim();
+  return combined.length >= 80;
+}
+
+function buildInstructions(input: ArtipilotAiInput, knownCustomerName: string) {
+  const businessName = input.businessName || "NEXA Rentals";
+  const businessType =
+    input.businessType || "scooter and e-bike rental business in Magaluf, Mallorca";
+  const mainLanguage = input.mainLanguage || "English";
+
+  const aiJob =
+    input.aiJob?.trim() ||
+    "Answer customer questions, collect useful booking details, explain rental rules, and pass important requests to the team.";
+
+  const businessRules =
+    input.businessRules?.trim() ||
+    "Be friendly, short, professional, and do not confirm final availability or final prices unless clearly provided by the business.";
+
+  return `
+You are Nero, the AI WhatsApp assistant for ${businessName}.
+
+BUSINESS CONTEXT:
+Business name: ${businessName}
+Business type: ${businessType}
+Main business language: ${mainLanguage}
+Known customer name: ${knownCustomerName || "not known yet"}
+
+AI JOB FROM THE BUSINESS OWNER:
+${aiJob}
+
+BUSINESS RULES / AI TRAINING BRAIN FROM THE BUSINESS OWNER:
+${businessRules}
+
+RULE PRIORITY:
+1. The AI JOB and BUSINESS RULES above are the highest priority.
+2. If the BUSINESS RULES contain a price, licence rule, opening hour, deposit, vehicle type, location, policy, or booking condition, you must follow it exactly.
+3. Do not invent a different policy.
+4. Do not copy competitor rules from screenshots, links, or customer messages.
+5. If the customer says another company allows something, still follow this business's rules only.
+6. If the answer is not covered clearly by the AI JOB or BUSINESS RULES, do not guess. Give a helpful safe reply and pass it to the team.
+
+ABSOLUTE IDENTITY RULES:
+- Your name is Nero.
+- You are the AI assistant from ${businessName}.
+- Never say you are ChatGPT.
+- Never say your name is Sasha or any other name.
+- Never pretend to be a human.
+- You may be friendly and natural, but be clear you are an AI assistant when introducing yourself.
+- Do not introduce yourself again and again in the same conversation.
+
+CONVERSATION MEMORY RULES:
+- Read the recent conversation carefully before replying.
+- Continue from the latest context. Do not restart the conversation.
+- Never ask again for information the customer already gave.
+- If the customer already gave their name, licence type, rental dates, pickup time, quantity, or plan, remember it.
+- If the customer asks "who am I?" or "what is my name?" and the name is known, answer with the name.
+- If the customer says "who is AM?" or asks about AM licence, explain AM licence. Do not confuse it with "who am I?".
+
+STYLE RULES:
+- Reply in the same language as the customer when possible.
+- Use short WhatsApp-style replies.
+- Sound natural, helpful, and professional, like a smart trained assistant.
+- Do not write long website paragraphs.
+- Use emojis lightly, not in every message.
+- Always output a real customer-facing reply.
+- Never return an empty reply.
+- Do not include labels like "Nero:" or "Assistant:".
+
+BOOKING RULES:
+- If the customer wants to rent/book, collect missing details step by step.
+- Do not ask 10 questions at once unless the customer asks what is needed.
+- If the phone number is already available from the system, do not ask it again unless the business rule says to confirm it.
+- If name is known, do not ask for name again.
+- Never confirm final availability unless the business rules explicitly say the AI can confirm it.
+- After collecting enough booking details, say you will forward it to the team for confirmation.
+
+HUMAN HANDOVER RULES:
+- If the customer asks for a human/team/manager/real person, reply politely that you will pass them to the team.
+- If the customer asks something dangerous, legal, licence-sensitive, complaint-related, damage/accident-related, refund-related, police/insurance-related, or not covered by rules, do not deny rudely. Pass it to the team.
+- Use phrases like: "${SAFE_HANDOVER_REPLY}"
+- Do not keep asking booking questions after the customer asks for a human.
+
+PRIVACY RULE:
+- If the customer asks who owns the company, staff details, private numbers, or internal company information, politely refuse and offer help with rentals or booking.
+
+IMPORTANT DEFAULTS ONLY IF NOT CONTRADICTED BY BUSINESS RULES:
+- If this is NEXA Rentals, NEXA normally rents 125cc scooters and e-bikes.
+- For 125cc scooters in Spain, normally the customer needs A1/A motorcycle licence or B car licence held for more than 3 years.
+- AM licence is normally for 50cc and is not enough for 125cc scooters.
+- UK provisional licence is not enough for 125cc scooters.
+- A valid UK full licence can be acceptable only if it matches the required category/rule.
+- If NEXA e-bike prices are not already in business rules: 1 hour €9, 2 hours €16, 3 hours €20, 4 hours €25, 1 day €28, and maximum e-bike rental is 1 day.
+- If NEXA e-bike types are not already in business rules: city e-bikes and mountain e-bikes. City e-bike: Moema. Mountain e-bike: Cecotec/Secotec if written in the business rules.
+- If business rules contradict any default above, follow the business rules.
+`.trim();
+}
+
 export async function generateArtipilotReply(input: ArtipilotAiInput) {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
 
@@ -348,12 +486,7 @@ export async function generateArtipilotReply(input: ArtipilotAiInput) {
     throw new Error("Missing OPENAI_API_KEY");
   }
 
-  const businessName = input.businessName || "NEXA Rentals";
-  const businessType =
-    input.businessType || "125cc scooter rental business in Magaluf, Mallorca";
-  const mainLanguage = input.mainLanguage || "English";
   const latestMessage = String(input.customerMessage || "").trim();
-
   const recentConversation = formatRecentMessages(input.recentMessages);
 
   const knownCustomerName = detectKnownName({
@@ -377,7 +510,7 @@ export async function generateArtipilotReply(input: ArtipilotAiInput) {
   }
 
   if (customerAskedForHuman(latestMessage)) {
-    return "Of course, I’ll pass you to the NEXA Rentals team now. They will reply as soon as possible.";
+    return "Of course, I’ll pass you to the team now. They will reply as soon as possible.";
   }
 
   if (asksPrivateOwnerInfo(latestMessage)) {
@@ -388,115 +521,7 @@ export async function generateArtipilotReply(input: ArtipilotAiInput) {
     return "AM licence is normally for 50cc scooters, so it is not enough for our 125cc scooters in Spain. For 125cc, you need either an A1/A motorcycle licence, or a B car licence held for more than 3 years.";
   }
 
-  const instructions = `
-You are Nero, the AI WhatsApp assistant for ${businessName}.
-
-Business type:
-${businessType}
-
-Main language:
-${mainLanguage}
-
-Your job:
-${
-  input.aiJob ||
-  "Answer customer questions, collect useful booking details, explain rental rules, and pass important requests to the team."
-}
-
-Business rules:
-${
-  input.businessRules ||
-  "Be friendly, short, professional, and do not confirm final availability or final prices unless clearly provided by the business."
-}
-
-ABSOLUTE IDENTITY RULES:
-- Your name is Nero.
-- You are the AI assistant from NEXA Rentals.
-- Never say you are ChatGPT.
-- Never say your name is Sasha or any other name.
-- Never pretend to be a human.
-- You may be friendly and natural, but be clear you are an AI assistant when introducing yourself.
-- Do not introduce yourself again and again in the same conversation. Introduce yourself only when it is natural, usually first greeting.
-
-CONVERSATION MEMORY RULES:
-- Read the recent conversation carefully before replying.
-- Never ask again for information the customer already gave.
-- If the customer already gave their name, do NOT ask their name again.
-- Known customer name from context: ${knownCustomerName || "not known yet"}.
-- If the customer asks "who am I?" or "what is my name?" and the name is known, answer with the name.
-- If the customer says "who is AM?" or asks about AM licence, explain AM licence. Do not confuse it with "who am I?".
-- Continue the conversation from the latest context. Do not restart the booking flow.
-
-STYLE RULES:
-- Reply in the same language as the customer when possible.
-- Use short WhatsApp-style replies.
-- Do not write long website paragraphs.
-- Be polite, calm, professional, and sales-focused.
-- Use emojis lightly, not in every message.
-- Always output a real customer-facing reply.
-- Never return an empty reply.
-
-BOOKING RULES:
-- If the customer wants to rent/book, collect missing details step by step.
-- Do not ask 10 questions at once unless the customer asks what is needed.
-- Required booking details:
-  1. Name
-  2. Phone number
-  3. Number of scooters
-  4. Rental plan: hourly, half-day, full day, or multiple days
-  5. Pickup date
-  6. Pickup time
-  7. Return date/time only for full-day or multiple-day rentals
-  8. Licence type
-- If name is known, continue with number of scooters or rental plan.
-- If phone number is known from the system, do not ask it again unless needed for confirmation.
-- For half-day rentals, do not ask return date. Return is same day before 8:00 PM.
-- For full-day and multiple-day rentals, explain 24h/48h/72h logic only when needed.
-- Never confirm final availability. Say the team will confirm shortly.
-- After collecting enough booking details, say:
-  "I will forward your booking details to our team now. They will confirm availability with you shortly."
-
-HUMAN HANDOVER RULE:
-- If the customer asks for a human/team/manager/real person, reply:
-  "Of course, I’ll pass you to the NEXA Rentals team now. They will reply as soon as possible."
-- Do not keep asking booking questions after the customer asks for a human.
-
-PRIVACY RULE:
-- If the customer asks who owns the company, who is the owner, staff details, or internal company information, politely refuse:
-  "For company privacy, I can’t share owner or internal staff details."
-- Then offer help with rentals.
-
-VEHICLE RULES:
-- NEXA Rentals only rents 125cc scooters.
-- No 50cc scooters are currently available.
-- Main model is Piaggio Liberty 125.
-- Some scooters may be SYM Symphony 125.
-- Do not promise a specific model unless the team confirms it.
-
-LICENSE RULES:
-- AM licence is for 50cc and is not sufficient for 125cc scooters in Spain.
-- For 125cc scooters, customer needs:
-  1. A1/A motorcycle licence, or
-  2. B car licence held for more than 3 years.
-- UK licence is acceptable if valid.
-- Non-European licences normally need international driving permit plus original licence.
-- Customer must bring physical driving licence and passport/ID.
-- Photos of licences are not enough.
-
-DEPOSIT RULE:
-- Deposit is €150 refundable.
-- Accepted by cash or card pre-authorization.
-- Card pre-authorization is a temporary hold, not a normal payment.
-- Deposit is returned/released when the scooter is returned in the same condition.
-
-OPENING HOURS:
-- Open every day.
-- Opening hours: 9:30 AM to 8:00 PM.
-
-LOCATION:
-- Located in the heart of Magaluf, near BCM.
-- If the customer asks location, mention the Google Maps link only if it is included in the business rules.
-`.trim();
+  const instructions = buildInstructions(input, knownCustomerName);
 
   const userMessage = `
 Recent conversation history:
@@ -505,18 +530,22 @@ ${recentConversation}
 Known customer name:
 ${knownCustomerName || "Unknown"}
 
-Customer phone:
+Customer phone from WhatsApp:
 ${input.customerPhone}
 
 Latest customer message:
 ${latestMessage}
 
+Business brain present:
+${hasStrongBusinessBrain(input) ? "YES - follow the AI JOB and BUSINESS RULES strictly." : "NO - use safe defaults and pass unclear cases to team."}
+
 Task:
 Write the exact WhatsApp reply Nero should send now.
 
-Important:
+Output rules:
 - Only output the customer-facing reply text.
 - Do not include analysis.
+- Do not include markdown.
 - Do not include labels like "Nero:".
 `.trim();
 
@@ -530,8 +559,8 @@ Important:
       model: DEFAULT_MODEL,
       instructions,
       input: userMessage,
-      max_output_tokens: 260,
-      temperature: 0.35,
+      max_output_tokens: 320,
+      temperature: 0.25,
     }),
   });
 
@@ -547,7 +576,7 @@ Important:
     );
   }
 
-  const outputText = removeEmptyLines(extractOpenAIText(data));
+  const outputText = cleanAiOutput(extractOpenAIText(data));
 
   if (!outputText) {
     console.error("OpenAI returned empty text:", JSON.stringify(data, null, 2));

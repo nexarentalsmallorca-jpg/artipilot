@@ -163,6 +163,38 @@ const attentionKeywords = [
   "puncture",
 ];
 
+const aiHandoffKeywords = [
+  "pass this to the team",
+  "pass you to the team",
+  "pass it to the team",
+  "team will confirm",
+  "team will reply",
+  "team can confirm",
+  "team to confirm",
+  "i’ll forward",
+  "i will forward",
+  "forward this to the team",
+  "forward your booking details",
+  "human team",
+  "real person",
+  "please wait for the team",
+  "i can’t confirm",
+  "i cannot confirm",
+  "i don’t have enough information",
+  "i do not have enough information",
+  "not covered",
+  "not sure",
+];
+
+const mediaPlaceholders = [
+  "[Image received]",
+  "[Video received]",
+  "[Audio message received]",
+  "[Document received]",
+  "[Sticker received]",
+  "[Location received]",
+];
+
 const translationLanguages = [
   "English",
   "Spanish",
@@ -270,6 +302,70 @@ function getContactPhoto(contact: Contact | null) {
 function getContactNote(contact: Contact | null) {
   if (!contact) return "";
   return contact.customer_notes || contact.profile_note || "";
+}
+
+function normalizeMessageText(text: string) {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function isMediaMessage(message: Message) {
+  const messageType = String(message.message_type || "").toLowerCase();
+  const mimeType = String(message.media_mime_type || "").toLowerCase();
+  const content = String(message.content || "").trim();
+
+  if (message.media_url || message.media_id || message.media_storage_path) return true;
+
+  if (
+    ["image", "video", "audio", "document", "sticker", "location"].includes(messageType)
+  ) {
+    return true;
+  }
+
+  if (
+    mimeType.startsWith("image/") ||
+    mimeType.startsWith("video/") ||
+    mimeType.startsWith("audio/") ||
+    mimeType.includes("pdf") ||
+    mimeType.includes("word") ||
+    mimeType.includes("excel") ||
+    mimeType.includes("spreadsheet")
+  ) {
+    return true;
+  }
+
+  return mediaPlaceholders.includes(content);
+}
+
+function canTranslateMessage(message: Message) {
+  const content = String(message.content || "").trim();
+  const messageType = String(message.message_type || "").toLowerCase();
+
+  if (message.direction !== "inbound") return false;
+  if (message.role !== "customer") return false;
+  if (!content) return false;
+  if (messageType && messageType !== "text") return false;
+  if (isMediaMessage(message)) return false;
+  if (mediaPlaceholders.includes(content)) return false;
+
+  return true;
+}
+
+function messageTriggersHumanAttention(message: Message) {
+  const content = normalizeMessageText(String(message.content || ""));
+
+  if (!content) return false;
+
+  if (message.role === "system") return true;
+
+  if (message.role === "customer") {
+    return attentionKeywords.some((keyword) => content.includes(keyword));
+  }
+
+  if (message.role === "assistant") {
+    return aiHandoffKeywords.some((keyword) => content.includes(keyword));
+  }
+
+  return false;
 }
 
 function Icon({ name, className = "" }: { name: IconName; className?: string }) {
@@ -689,8 +785,16 @@ function MessageBody({
   const onlyPlaceholderAudio =
     content === "[Audio message received]" && Boolean(mediaUrl);
 
+  const onlyPlaceholderDocument =
+    content === "[Document received]" && Boolean(mediaUrl);
+
   const shouldHidePlaceholder =
-    onlyPlaceholderImage || onlyPlaceholderVideo || onlyPlaceholderAudio;
+    onlyPlaceholderImage ||
+    onlyPlaceholderVideo ||
+    onlyPlaceholderAudio ||
+    onlyPlaceholderDocument;
+
+  const showTranslationBox = canTranslateMessage(message);
 
   return (
     <div className="space-y-2">
@@ -719,13 +823,12 @@ function MessageBody({
         <p className="whitespace-pre-wrap break-words">[Empty message]</p>
       ) : null}
 
-      {message.direction === "inbound" && message.role === "customer" ? (
+      {showTranslationBox ? (
         <TranslationBox translation={translation} isDark={isDark} />
       ) : null}
     </div>
   );
 }
-
 function ContactAvatar({
   contact,
   size = 44,
@@ -838,7 +941,7 @@ export default function InboxPage() {
   const [localClosedMap, setLocalClosedMap] = useState<Record<string, boolean>>({});
   const [localBlockedMap, setLocalBlockedMap] = useState<Record<string, boolean>>({});
   const [localMutedMap, setLocalMutedMap] = useState<Record<string, string | null>>({});
-  const [localHandledHumanMap, setLocalHandledHumanMap] = useState<Record<string, boolean>>({});
+  const [localHandledHumanMap, setLocalHandledHumanMap] = useState<Record<string, string>>({});
 
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null);
@@ -950,17 +1053,7 @@ export default function InboxPage() {
     }
 
     for (const message of messages) {
-      const content = String(message.content || "").toLowerCase();
-
-      if (message.role === "system") {
-        phones.add(message.contact_phone);
-        continue;
-      }
-
-      if (
-        message.role === "customer" &&
-        attentionKeywords.some((keyword) => content.includes(keyword))
-      ) {
+      if (messageTriggersHumanAttention(message)) {
         phones.add(message.contact_phone);
       }
     }
@@ -989,9 +1082,40 @@ export default function InboxPage() {
       );
   }, [messages, selectedPhone]);
 
+  const latestMessageAtByPhone = useMemo(() => {
+    const map = new Map<string, string>();
+
+    for (const message of messages) {
+      const current = map.get(message.contact_phone);
+      const currentTime = current ? new Date(current).getTime() : 0;
+      const nextTime = new Date(message.created_at).getTime();
+
+      if (!current || nextTime > currentTime) {
+        map.set(message.contact_phone, message.created_at);
+      }
+    }
+
+    return map;
+  }, [messages]);
+
   const needsHumanAttention = useCallback(
     (contact: Contact) => {
-      if (localHandledHumanMap[contact.phone]) return false;
+      const handledValue = localHandledHumanMap[contact.phone];
+
+      if (handledValue) {
+        const latestMessageAt = latestMessageAtByPhone.get(contact.phone);
+        const handledTime = Number(handledValue);
+
+        if (latestMessageAt && Number.isFinite(handledTime)) {
+          const latestTime = new Date(latestMessageAt).getTime();
+
+          if (Number.isFinite(latestTime) && latestTime <= handledTime) {
+            return false;
+          }
+        } else {
+          return false;
+        }
+      }
 
       return (
         contact.needs_human_attention === true ||
@@ -999,7 +1123,7 @@ export default function InboxPage() {
         inferredHumanPhones.has(contact.phone)
       );
     },
-    [inferredHumanPhones, localHandledHumanMap]
+    [inferredHumanPhones, localHandledHumanMap, latestMessageAtByPhone]
   );
 
   const isPinned = useCallback(
@@ -1091,10 +1215,18 @@ export default function InboxPage() {
       const aUnread = Number(a.unread_count || 0) > 0 ? 1 : 0;
       const bUnread = Number(b.unread_count || 0) > 0 ? 1 : 0;
 
+      const aClosed = isClosed(a) ? 1 : 0;
+      const bClosed = isClosed(b) ? 1 : 0;
+
+      const aBlocked = isBlocked(a) ? 1 : 0;
+      const bBlocked = isBlocked(b) ? 1 : 0;
+
       const aTime = new Date(a.last_message_at || a.created_at).getTime();
       const bTime = new Date(b.last_message_at || b.created_at).getTime();
 
       if (sortMode === "priority" || sortMode === "newest") {
+        if (aBlocked !== bBlocked) return aBlocked - bBlocked;
+        if (aClosed !== bClosed) return aClosed - bClosed;
         if (aHuman !== bHuman) return bHuman - aHuman;
         if (aPinned !== bPinned) return bPinned - aPinned;
         if (aUnread !== bUnread) return bUnread - aUnread;
@@ -1126,6 +1258,7 @@ export default function InboxPage() {
     needsHumanAttention,
     isPinned,
     isClosed,
+    isBlocked,
   ]);
 
   const loadInbox = useCallback(
@@ -1156,8 +1289,21 @@ export default function InboxPage() {
         const currentSelectedPhone = selectedPhoneRef.current;
 
         if (!currentSelectedPhone && nextContacts?.[0]?.phone) {
-          setSelectedPhone(nextContacts[0].phone);
-          selectedPhoneRef.current = nextContacts[0].phone;
+          const sortedFirst = [...nextContacts].sort((a, b) => {
+            const aHuman = a.needs_human_attention || a.human_attention ? 1 : 0;
+            const bHuman = b.needs_human_attention || b.human_attention ? 1 : 0;
+            const aUnread = Number(a.unread_count || 0) > 0 ? 1 : 0;
+            const bUnread = Number(b.unread_count || 0) > 0 ? 1 : 0;
+            const aTime = new Date(a.last_message_at || a.created_at).getTime();
+            const bTime = new Date(b.last_message_at || b.created_at).getTime();
+
+            if (aHuman !== bHuman) return bHuman - aHuman;
+            if (aUnread !== bUnread) return bUnread - aUnread;
+            return bTime - aTime;
+          })[0];
+
+          setSelectedPhone(sortedFirst.phone);
+          selectedPhoneRef.current = sortedFirst.phone;
         }
 
         if (
@@ -1181,8 +1327,7 @@ export default function InboxPage() {
   async function translateMessage(message: Message, force = false) {
     const content = String(message.content || "").trim();
 
-    if (!content) return;
-    if (message.direction !== "inbound" || message.role !== "customer") return;
+    if (!canTranslateMessage(message)) return;
 
     const key = `${message.id}:${translationTarget}`;
 
@@ -1230,7 +1375,7 @@ export default function InboxPage() {
 
   useEffect(() => {
     for (const message of selectedMessages) {
-      if (message.direction === "inbound" && message.role === "customer") {
+      if (canTranslateMessage(message)) {
         void translateMessage(message);
       }
     }
@@ -1696,7 +1841,7 @@ export default function InboxPage() {
   function markHumanHandled(contact: Contact) {
     setLocalHandledHumanMap((previous) => ({
       ...previous,
-      [contact.phone]: true,
+      [contact.phone]: String(Date.now()),
     }));
 
     setContacts((previous) =>
@@ -1781,8 +1926,8 @@ export default function InboxPage() {
               : "border-[#A8EACF] bg-[#ECFBF3]"
             : human
               ? isDark
-                ? "border-red-500/30 bg-red-950/20 hover:bg-red-950/30"
-                : "border-red-200 bg-red-50 hover:bg-red-100/60"
+                ? "border-red-500/60 bg-red-950/30 shadow-[0_0_0_1px_rgba(239,68,68,0.12)] hover:bg-red-950/40"
+                : "border-red-300 bg-red-50 shadow-[0_0_0_1px_rgba(239,68,68,0.08)] hover:bg-red-100/70"
               : unread > 0
                 ? isDark
                   ? "border-[#22D3EE]/25 bg-[#0A1B28] hover:bg-[#0D2434]"
@@ -1792,6 +1937,18 @@ export default function InboxPage() {
                   : "border-[#E2E8F0] bg-white hover:bg-[#F8FAFC]"
         )}
       >
+        {human ? (
+          <div
+            className={cx(
+              "mb-2 flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-black",
+              isDark ? "bg-red-500/15 text-red-200" : "bg-red-100 text-red-700"
+            )}
+          >
+            <Icon name="warning" className="h-3.5 w-3.5" />
+            <span className="truncate">Human attention needed</span>
+          </div>
+        ) : null}
+
         <div className="flex gap-3">
           <ContactAvatar contact={contact} size={mobile ? 48 : 44} />
 
@@ -1812,11 +1969,15 @@ export default function InboxPage() {
             <p
               className={cx(
                 "mt-1 truncate text-sm",
-                unread > 0
+                human
                   ? isDark
-                    ? "font-bold text-white"
-                    : "font-bold text-[#0F172A]"
-                  : mutedTextClass
+                    ? "font-black text-red-100"
+                    : "font-black text-red-800"
+                  : unread > 0
+                    ? isDark
+                      ? "font-bold text-white"
+                      : "font-bold text-[#0F172A]"
+                    : mutedTextClass
               )}
             >
               {contact.last_message || "No message"}
@@ -1834,7 +1995,7 @@ export default function InboxPage() {
               ) : null}
 
               {human ? (
-                <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-black text-red-700">
+                <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-black text-white">
                   Human
                 </span>
               ) : null}
@@ -1870,6 +2031,7 @@ export default function InboxPage() {
     const inbound = message.direction === "inbound";
     const translationKey = `${message.id}:${translationTarget}`;
     const translation = translations[translationKey];
+    const showTranslateButton = canTranslateMessage(message);
 
     return (
       <div
@@ -1899,7 +2061,7 @@ export default function InboxPage() {
             translation={translation}
           />
 
-          {inbound && message.role === "customer" ? (
+          {showTranslateButton ? (
             <button
               type="button"
               onClick={() => translateMessage(message, true)}
@@ -2040,6 +2202,12 @@ export default function InboxPage() {
               </button>
             ))}
           </div>
+
+          {humanCount > 0 ? (
+            <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-black text-red-700">
+              {humanCount} chat{humanCount === 1 ? "" : "s"} need human attention.
+            </div>
+          ) : null}
 
           <div className="mt-3">
             <PushNotificationBox isDark={isDark} compact />
@@ -2313,15 +2481,40 @@ export default function InboxPage() {
     return (
       <>
         {selectedContact && selectedHumanAttention ? (
-          <div className="border-b border-red-200 bg-red-50 px-5 py-3 text-sm font-bold text-red-700">
-            This chat needs human attention.
-            <button
-              type="button"
-              onClick={() => markHumanHandled(selectedContact)}
-              className="ml-3 rounded-full border border-red-200 bg-white px-3 py-1 text-xs font-black text-red-700"
-            >
-              Mark handled
-            </button>
+          <div
+            className={cx(
+              "border-b px-5 py-3 text-sm font-bold",
+              isDark
+                ? "border-red-500/30 bg-red-950/30 text-red-100"
+                : "border-red-200 bg-red-50 text-red-700"
+            )}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <Icon name="warning" />
+              <span>This chat needs human attention.</span>
+              {selectedContact.human_attention_reason ? (
+                <span className="font-medium opacity-90">
+                  Reason: {selectedContact.human_attention_reason}
+                </span>
+              ) : (
+                <span className="font-medium opacity-90">
+                  AI may need help or the customer asked for the team.
+                </span>
+              )}
+
+              <button
+                type="button"
+                onClick={() => markHumanHandled(selectedContact)}
+                className={cx(
+                  "ml-auto rounded-full border px-3 py-1 text-xs font-black",
+                  isDark
+                    ? "border-red-400/30 bg-red-500/10 text-red-100"
+                    : "border-red-200 bg-white text-red-700"
+                )}
+              >
+                Mark handled
+              </button>
+            </div>
           </div>
         ) : null}
 
@@ -2812,6 +3005,12 @@ export default function InboxPage() {
                 <span>{humanCount} human alerts · {totalUnread} unread</span>
               </div>
 
+              {humanCount > 0 ? (
+                <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-black text-red-700">
+                  {humanCount} chat{humanCount === 1 ? "" : "s"} need human attention and are shown first.
+                </div>
+              ) : null}
+
               <div className="mt-3">
                 <PushNotificationBox isDark={isDark} />
               </div>
@@ -2914,6 +3113,17 @@ export default function InboxPage() {
                 {selectedContact ? selectedContact.phone : "Online"}
               </p>
 
+              {selectedContact && needsHumanAttention(selectedContact) ? (
+                <div className="mt-4 w-full rounded-2xl border border-red-200 bg-red-50 p-4 text-left text-sm font-bold text-red-700">
+                  Human attention needed for this customer.
+                  {selectedContact.human_attention_reason ? (
+                    <p className="mt-1 font-medium">
+                      {selectedContact.human_attention_reason}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
               <div className={cx("mt-5 w-full rounded-2xl border p-4 text-left", softPanelClass)}>
                 <p className="text-xs font-black uppercase tracking-[0.14em]">Profile details</p>
                 <p className={cx("mt-3 text-sm leading-6", mutedTextClass)}>
@@ -2943,7 +3153,7 @@ export default function InboxPage() {
             </div>
 
             <p className={cx("mt-3 text-sm leading-6", mutedTextClass)}>
-              Theme and translation target are saved on this device.
+              Theme and translation target are saved on this device. Translation only appears for real text messages, not images, videos, audio, documents, or locations.
             </p>
 
             <div className="mt-5 grid grid-cols-2 gap-3">
@@ -2990,7 +3200,7 @@ export default function InboxPage() {
               >
                 {translationLanguages.map((language) => (
                   <option key={language} value={language}>
-                    Auto translate customer messages to {language}
+                    Auto translate customer text messages to {language}
                   </option>
                 ))}
               </select>
