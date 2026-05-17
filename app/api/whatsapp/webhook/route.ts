@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   ArtipilotChatMessage,
   generateArtipilotReply,
+  shouldMarkHumanAttentionFromText,
 } from "@/lib/artipilotAi";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { sendCustomerMessagePushNotification } from "@/lib/sendPushNotification";
@@ -1037,14 +1038,19 @@ async function getRecentMessages({
     .eq("owner_user_id", workspace.owner_user_id)
     .eq("contact_phone", phone)
     .order("created_at", { ascending: false })
-    .limit(18);
+    .limit(30);
 
   if (error) {
     console.error("Recent messages lookup error:", error);
     return [];
   }
 
-  return ((data || []).reverse() as ArtipilotChatMessage[]) || [];
+  return (
+    ((data || [])
+      .reverse()
+      .filter((message) => String(message.content || "").trim()) as ArtipilotChatMessage[]) ||
+    []
+  );
 }
 
 async function saveAiReply({
@@ -1417,7 +1423,6 @@ export async function POST(req: NextRequest) {
 
               console.log("✅ Blocked contact inbound message saved:", {
                 phone,
-                messageId: message.id || null,
                 messageType,
               });
             }
@@ -1437,11 +1442,7 @@ export async function POST(req: NextRequest) {
           });
 
           if (!incomingSaved) {
-            console.error("Incoming customer message was not saved:", {
-              phone,
-              messageId: message.id || null,
-              messageType,
-            });
+            console.error("Could not save incoming message. Skipping AI reply.");
             continue;
           }
 
@@ -1452,25 +1453,24 @@ export async function POST(req: NextRequest) {
             content,
           });
 
-          console.log("✅ Incoming WhatsApp message saved:", {
-            phone,
-            messageId: message.id || null,
-            messageType,
-            mediaStored: Boolean(media?.mediaUrl),
-            mediaError: media?.error || null,
-            aiEnabled: savedContact.ai_enabled !== false,
-            needsHumanAttention,
-            humanAttentionReason,
-            ownerPrivacyQuestion,
-          });
-
-          if (media?.error) {
-            await saveSystemMessage({
+          if (needsHumanAttention) {
+            await markHumanAttention({
               workspace,
               phone,
-              content: `Media received but could not be stored: ${media.error}`,
-              error: media.error,
+              reason: humanAttentionReason,
             });
+
+            console.log("🚨 Customer message triggered human attention:", {
+              phone,
+              reason: humanAttentionReason,
+            });
+          }
+
+          if (savedContact.ai_enabled === false) {
+            console.log("AI is disabled for this contact. Message saved only:", {
+              phone,
+            });
+            continue;
           }
 
           if (ownerPrivacyQuestion) {
@@ -1478,14 +1478,19 @@ export async function POST(req: NextRequest) {
               const privacyReply = getOwnerPrivacyReply();
               const whatsappData = await sendWhatsAppText(phone, privacyReply);
 
-              await saveAiReply({
+              const whatsappMessageId = await saveAiReply({
                 workspace,
                 phone,
                 aiReply: privacyReply,
                 whatsappData,
               });
+
+              console.log("✅ Owner privacy reply sent:", {
+                phone,
+                whatsappMessageId,
+              });
             } catch (privacyError) {
-              console.error("Owner privacy reply failed:", privacyError);
+              console.error("Owner privacy auto reply failed:", privacyError);
 
               await saveSystemMessage({
                 workspace,
@@ -1501,51 +1506,8 @@ export async function POST(req: NextRequest) {
             continue;
           }
 
-          if (needsHumanAttention) {
-            const handoverReply =
-              "Of course, I’ll pass you to the NEXA Rentals team now. They will reply as soon as possible.";
-
-            try {
-              const whatsappData = await sendWhatsAppText(phone, handoverReply);
-
-              await saveAiReply({
-                workspace,
-                phone,
-                aiReply: handoverReply,
-                whatsappData,
-              });
-
-              await markHumanAttention({
-                workspace,
-                phone,
-                reason: humanAttentionReason,
-              });
-            } catch (handoverError) {
-              console.error("Human handover reply failed:", handoverError);
-
-              await saveSystemMessage({
-                workspace,
-                phone,
-                content:
-                  handoverError instanceof Error
-                    ? `Human handover reply failed: ${handoverError.message}`
-                    : "Human handover reply failed.",
-                error: handoverError,
-              });
-            }
-
-            continue;
-          }
-
-          if (savedContact.ai_enabled === false) {
-            console.log("AI disabled for this contact. No auto reply sent:", {
-              phone,
-            });
-            continue;
-          }
-
           if (!shouldAiReply(messageType)) {
-            console.log("AI reply skipped for message type:", messageType);
+            console.log("Incoming message saved without AI reply:", messageType);
             continue;
           }
 
@@ -1563,29 +1525,46 @@ export async function POST(req: NextRequest) {
               mainLanguage: workspace.main_language || "English",
               aiJob:
                 workspace.ai_job ||
-                "Answer customer questions, collect useful booking details, help with scooter rental enquiries, and pass important requests to the team.",
+                "You are Nero, the AI WhatsApp assistant for this business. Reply like a smart ChatGPT-style assistant, understand the customer's intention, remember the recent conversation, answer naturally, collect booking details step by step, and pass unclear or important cases to the team.",
               businessRules:
                 workspace.business_rules ||
-                "Be short, friendly and professional. Never confirm final availability, final price, or important decisions unless the business has clearly provided that information. If unsure, say the team will confirm shortly.",
+                "Be short, friendly and professional. Follow business rules exactly. Never invent prices, availability, licence rules, opening hours, deposits, policies, or final confirmations. If something is unclear, licence-sensitive, complaint-related, damage-related, refund-related, or needs team approval, politely pass the chat to the human team.",
               customerName: savedContact.name || customerName,
               customerPhone: phone,
               customerMessage: content,
               recentMessages,
             });
 
-            if (!aiReply.trim()) {
+            const cleanAiReply = aiReply.trim();
+
+            if (!cleanAiReply) {
               console.log("AI reply was empty. Skipping send.");
               continue;
             }
 
-            const whatsappData = await sendWhatsAppText(phone, aiReply);
+            const whatsappData = await sendWhatsAppText(phone, cleanAiReply);
 
             const whatsappMessageId = await saveAiReply({
               workspace,
               phone,
-              aiReply,
+              aiReply: cleanAiReply,
               whatsappData,
             });
+
+            if (shouldMarkHumanAttentionFromText(cleanAiReply)) {
+              await markHumanAttention({
+                workspace,
+                phone,
+                reason:
+                  "AI reply indicated that the team/human should confirm or continue this conversation.",
+              });
+
+              console.log("🚨 AI reply triggered human attention:", {
+                phone,
+                reason:
+                  "AI reply indicated that the team/human should confirm or continue this conversation.",
+              });
+            }
 
             console.log("✅ AI WhatsApp reply sent successfully:", {
               phone,
