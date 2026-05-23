@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 function LogoutIcon({ className = "h-5 w-5" }: { className?: string }) {
@@ -45,8 +45,13 @@ function SwitchIcon({ className = "h-4 w-4" }: { className?: string }) {
 
 export default function DashboardLogoutButton() {
   const router = useRouter();
+  const pathname = usePathname();
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
+
+  if (pathname?.startsWith("/dashboard/inbox")) {
+    return null;
+  }
 
   async function handleSignOut() {
     if (loading) return;

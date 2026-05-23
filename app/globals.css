@@ -25,7 +25,7 @@ body {
   margin: 0;
   background: #030509;
   color: #ffffff;
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
   overflow-x: hidden;
 }
 
