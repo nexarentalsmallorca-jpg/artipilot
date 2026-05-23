@@ -6,7 +6,7 @@ import InboxIcon from "./InboxIcon";
 import type { IconName } from "@/lib/inbox/types";
 
 const TABS: { label: string; icon: IconName; href: string; active?: boolean }[] = [
-  { label: "Chats", icon: "inbox", href: "/dashboard/inbox", active: true },
+  { label: "Chats", icon: "inbox", href: "/dashboard/inbox/chats", active: true },
   { label: "Training", icon: "training", href: "/dashboard/training" },
   { label: "Replies", icon: "whatsapp", href: "/dashboard/quick-replies" },
   { label: "Settings", icon: "settings", href: "/dashboard/settings" },

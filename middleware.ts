@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  isPrivateSessionCookie,
+  PRIVATE_SESSION_COOKIE,
+} from "@/lib/auth/privateSession";
 
 const PUBLIC_FILE = /\.(.*)$/;
 
@@ -14,8 +18,7 @@ export function middleware(request: NextRequest) {
   const isPrivateHost = hostname === privateHost;
 
   const isPublicHost =
-    hostname === "artipilot.com" ||
-    hostname === "www.artipilot.com";
+    hostname === "artipilot.com" || hostname === "www.artipilot.com";
 
   const isStaticFile =
     pathname.startsWith("/_next") ||
@@ -33,7 +36,25 @@ export function middleware(request: NextRequest) {
   }
 
   if (isPrivateHost) {
+    const session = request.cookies.get(PRIVATE_SESSION_COOKIE)?.value;
+    const isLoggedIn = isPrivateSessionCookie(session);
+
     if (pathname === "/") {
+      const url = request.nextUrl.clone();
+      url.pathname = "/login";
+      return NextResponse.redirect(url);
+    }
+
+    if (pathname === "/login" || pathname.startsWith("/logout")) {
+      if (pathname === "/login" && isLoggedIn) {
+        const url = request.nextUrl.clone();
+        url.pathname = "/dashboard/inbox";
+        return NextResponse.redirect(url);
+      }
+      return NextResponse.next();
+    }
+
+    if (pathname.startsWith("/dashboard") && !isLoggedIn) {
       const url = request.nextUrl.clone();
       url.pathname = "/login";
       return NextResponse.redirect(url);

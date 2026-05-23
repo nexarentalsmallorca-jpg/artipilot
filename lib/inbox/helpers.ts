@@ -1,7 +1,7 @@
 import type { Contact, Message } from "./types";
 
 export const NAV_ITEMS = [
-  { label: "Inbox", href: "/dashboard/inbox", icon: "inbox" as const },
+  { label: "Inbox", href: "/dashboard/inbox/chats", icon: "inbox" as const },
   { label: "Training", href: "/dashboard/training", icon: "training" as const },
   { label: "Quick replies", href: "/dashboard/quick-replies", icon: "whatsapp" as const },
   { label: "Settings", href: "/dashboard/settings", icon: "settings" as const },
