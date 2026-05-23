@@ -1,8 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  PRIVATE_SESSION_COOKIE,
-  PRIVATE_SESSION_VALUE,
-} from "@/lib/auth/private-session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,7 +29,7 @@ export async function POST(request: NextRequest) {
     new URL("/dashboard/inbox", request.url),
     REDIRECT_STATUS
   );
-  response.cookies.set(PRIVATE_SESSION_COOKIE, PRIVATE_SESSION_VALUE, {
+  response.cookies.set("artipilot_private_session", "authenticated", {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",

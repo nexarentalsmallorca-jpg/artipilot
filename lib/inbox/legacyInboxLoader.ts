@@ -1,6 +1,9 @@
 ﻿import { NextRequest, NextResponse } from "next/server";
 import { getPrivateDashboardWorkspace } from "@/lib/auth/dashboardAccess";
-import { hasPrivateSessionFromRequest } from "@/lib/auth/private-session";
+import {
+  hasPrivateSessionFromRequest,
+  unauthorizedJsonWithSource,
+} from "@/lib/auth/private-session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
@@ -622,7 +625,7 @@ export async function GET(request: NextRequest) {
       };
       userId = privateWorkspace.owner_user_id;
     } else {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return unauthorizedJsonWithSource(request, "api-inbox");
     }
 
     if (!workspace?.id) {

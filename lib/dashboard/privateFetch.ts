@@ -16,34 +16,38 @@ export async function parsePrivateApiError(
   label: string,
   response: Response
 ): Promise<string> {
+  let message = "";
+
   try {
-    const data = await response.json();
+    const data = await response.clone().json();
 
     if (data?.error) {
-      return `${label} error: ${String(data.error)}`;
-    }
-
-    if (data?.message) {
-      return `${label} error: ${String(data.message)}`;
+      message = String(data.error);
+    } else if (data?.message) {
+      message = String(data.message);
     }
   } catch {
-    // ignore JSON parse errors
+    try {
+      message = await response.clone().text();
+    } catch {
+      message = "";
+    }
   }
 
   if (response.status === 401) {
-    return `${label} error: Unauthorized. Please refresh and log in again.`;
+    return `${label} error: Unauthorized. Your private session cookie is missing or rejected. Log out, log in again, then refresh.`;
   }
 
   if (response.status === 403) {
-    return `${label} error: Forbidden. Your private session is not accepted.`;
+    return `${label} error: Forbidden.`;
   }
 
   if (response.status === 404) {
     return `${label} error: API route not found.`;
   }
 
-  if (response.status >= 500) {
-    return `${label} error: Server error ${response.status}.`;
+  if (message) {
+    return `${label} error: ${message}`;
   }
 
   return `${label} error: Request failed with status ${response.status}.`;

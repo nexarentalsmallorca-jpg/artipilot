@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPrivateDashboardWorkspace } from "@/lib/auth/dashboardAccess";
-import { hasPrivateSessionFromRequest } from "@/lib/auth/private-session";
+import {
+  hasPrivateSessionFromRequest,
+  unauthorizedJsonWithSource,
+} from "@/lib/auth/private-session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { DB } from "@/lib/db/tables";
 
@@ -30,7 +33,7 @@ function detectWhatsAppType(mime: string, filename: string) {
 
 export async function POST(request: NextRequest) {
   if (!hasPrivateSessionFromRequest(request)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return unauthorizedJsonWithSource(request, "api-media-upload");
   }
 
   const workspace = await getPrivateDashboardWorkspace();

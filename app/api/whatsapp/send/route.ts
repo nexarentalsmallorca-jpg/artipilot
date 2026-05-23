@@ -1,5 +1,8 @@
 ﻿import { NextRequest, NextResponse } from "next/server";
-import { requirePrivateSession } from "@/lib/auth/requirePrivateSession";
+import {
+  hasPrivateSessionFromRequest,
+  unauthorizedJsonWithSource,
+} from "@/lib/auth/private-session";
 import {
   sendByPhone,
   sendDashboardMessage,
@@ -10,8 +13,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
-  const denied = requirePrivateSession(request);
-  if (denied) return denied;
+  if (!hasPrivateSessionFromRequest(request)) {
+    return unauthorizedJsonWithSource(request, "api-whatsapp-send");
+  }
 
   try {
     const body = (await request.json()) as {

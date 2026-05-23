@@ -1,16 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  hasPrivateSessionFromRequest,
-  PRIVATE_SESSION_COOKIE,
-} from "@/lib/auth/private-session";
-
-export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  const raw = request.cookies.get(PRIVATE_SESSION_COOKIE)?.value;
+  const cookie = request.cookies.get("artipilot_private_session")?.value;
 
   return NextResponse.json({
-    hasSession: hasPrivateSessionFromRequest(request),
-    cookieExists: Boolean(raw),
+    hasSession: cookie === "authenticated",
+    cookieExists: Boolean(cookie),
+    cookieValuePreview: cookie ? "exists" : "missing",
+    host: request.headers.get("host"),
+    timestamp: new Date().toISOString(),
   });
 }

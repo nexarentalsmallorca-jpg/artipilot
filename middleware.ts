@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+
 const PUBLIC_FILE = /\.(.*)$/;
 const PRIVATE_SESSION_COOKIE = "artipilot_private_session";
 const PRIVATE_SESSION_VALUE = "authenticated";
@@ -16,8 +17,7 @@ export function middleware(request: NextRequest) {
     hostname === "artipilot.com" || hostname === "www.artipilot.com";
 
   const isLoggedIn =
-    request.cookies.get(PRIVATE_SESSION_COOKIE)?.value ===
-    PRIVATE_SESSION_VALUE;
+    request.cookies.get(PRIVATE_SESSION_COOKIE)?.value === PRIVATE_SESSION_VALUE;
 
   const isStaticFile =
     pathname.startsWith("/_next") ||
@@ -27,14 +27,6 @@ export function middleware(request: NextRequest) {
     PUBLIC_FILE.test(pathname);
 
   if (isStaticFile) return NextResponse.next();
-
-  if (
-    pathname.startsWith("/api/whatsapp/webhook") ||
-    pathname.startsWith("/api/auth/private-login") ||
-    pathname.startsWith("/api/debug-host")
-  ) {
-    return NextResponse.next();
-  }
 
   if (isPublicHost) {
     if (pathname === "/") return NextResponse.next();
@@ -62,6 +54,22 @@ export function middleware(request: NextRequest) {
 
     if (pathname.startsWith("/logout")) return NextResponse.next();
 
+    if (pathname.startsWith("/api/whatsapp/webhook")) {
+      return NextResponse.next();
+    }
+
+    if (pathname.startsWith("/api/auth/private-login")) {
+      return NextResponse.next();
+    }
+
+    if (pathname.startsWith("/api/debug-session")) {
+      return NextResponse.next();
+    }
+
+    if (pathname.startsWith("/api/debug-host")) {
+      return NextResponse.next();
+    }
+
     if (pathname.startsWith("/dashboard")) {
       if (!isLoggedIn) {
         const url = request.nextUrl.clone();
@@ -73,7 +81,16 @@ export function middleware(request: NextRequest) {
 
     if (pathname.startsWith("/api")) {
       if (!isLoggedIn) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        return NextResponse.json(
+          {
+            error: "Unauthorized",
+            source: "middleware",
+            cookieExists: Boolean(
+              request.cookies.get(PRIVATE_SESSION_COOKIE)?.value
+            ),
+          },
+          { status: 401 }
+        );
       }
       return NextResponse.next();
     }

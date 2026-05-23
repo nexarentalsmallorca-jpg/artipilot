@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPrivateDashboardWorkspace } from "@/lib/auth/dashboardAccess";
-import { hasPrivateSessionFromRequest } from "@/lib/auth/private-session";
+import {
+  hasPrivateSessionFromRequest,
+  unauthorizedJson,
+} from "@/lib/auth/private-session";
 
 export type InboxWorkspace = {
   id: string;
@@ -21,7 +24,7 @@ export async function requireInboxApiAccess(
   if (!hasPrivateSessionFromRequest(request)) {
     return {
       ok: false,
-      response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
+      response: unauthorizedJson(),
     };
   }
 

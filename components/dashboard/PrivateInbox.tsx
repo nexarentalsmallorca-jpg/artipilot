@@ -133,9 +133,8 @@ export default function PrivateInbox() {
 
   async function toggleAi() {
     if (!selectedId) return;
-    const res = await fetch(`/api/contacts/${selectedId}/toggle-ai`, {
+    const res = await fetchPrivateApi(`/api/contacts/${selectedId}/toggle-ai`, {
       method: "POST",
-      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
@@ -144,9 +143,8 @@ export default function PrivateInbox() {
 
   async function suggestAi() {
     if (!selectedId) return;
-    const res = await fetch("/api/ai/suggest", {
+    const res = await fetchPrivateApi("/api/ai/suggest", {
       method: "POST",
-      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ contact_id: selectedId }),
     });
@@ -155,9 +153,8 @@ export default function PrivateInbox() {
   }
 
   async function deleteMsg(message: Message, mode: "me" | "everyone") {
-    await fetch(`/api/messages/${message.id}/delete`, {
+    await fetchPrivateApi(`/api/messages/${message.id}/delete`, {
       method: "POST",
-      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode }),
     });
@@ -166,9 +163,8 @@ export default function PrivateInbox() {
   }
 
   async function createTestChat() {
-    const res = await fetch("/api/dev/test-chat", {
+    const res = await fetchPrivateApi("/api/dev/test-chat", {
       method: "POST",
-      credentials: "include",
     });
     const data = await res.json();
     if (data.contact?.id) {
@@ -472,9 +468,8 @@ export default function PrivateInbox() {
                 type="button"
                 onClick={() => {
                   if (!selectedId) return;
-                  void fetch(`/api/contacts/${selectedId}`, {
+                  void fetchPrivateApi(`/api/contacts/${selectedId}`, {
                     method: "PATCH",
-                    credentials: "include",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ notes }),
                   }).then(() => {
