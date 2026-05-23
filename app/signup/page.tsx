@@ -216,9 +216,11 @@ function SignupCard({
       }
 
       const redirectTo =
-        typeof window !== "undefined"
-          ? `${window.location.origin}/auth/callback?next=/signup?plan=${selectedPlan}&offer=${selectedOffer}`
-          : undefined;
+  typeof window !== "undefined"
+    ? `${window.location.origin}/auth/callback?next=${encodeURIComponent(
+        `/setup?plan=${selectedPlan}&offer=${selectedOffer}`
+      )}`
+    : undefined;
 
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",

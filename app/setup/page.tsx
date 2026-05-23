@@ -387,47 +387,43 @@
         setError("");
         setIsCreating(true);
 
-        const workspacePayload = {
-          owner_user_id: userId,
-          selected_plan: selectedPlan,
-          selected_offer: selectedOffer,
-          business_name: businessName.trim(),
-          business_type: businessType,
-          main_language: language,
-          ai_job: aiJob.trim(),
-          business_rules: rules.trim(),
-          setup_completed: true,
-        };
+        const {
+  data: { session },
+} = await supabase.auth.getSession();
 
-        let workspaceId = existingWorkspaceId;
+if (!session?.access_token) {
+  throw new Error("Missing login session. Please sign in again.");
+}
 
-        if (existingWorkspaceId) {
-          const { data, error: updateError } = await supabase
-            .from("artipilot_workspaces")
-            .update(workspacePayload)
-            .eq("id", existingWorkspaceId)
-            .eq("owner_user_id", userId)
-            .select("id")
-            .single();
+const response = await fetch("/api/workspace/setup", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${session.access_token}`,
+  },
+  body: JSON.stringify({
+    existingWorkspaceId,
+    selectedPlan,
+    selectedOffer,
+    businessName: businessName.trim(),
+    businessType,
+    mainLanguage: language,
+    aiJob: aiJob.trim(),
+    businessRules: rules.trim(),
+  }),
+});
 
-          if (updateError) {
-            throw updateError;
-          }
+const result = await response.json();
 
-          workspaceId = data.id;
-        } else {
-          const { data, error: insertError } = await supabase
-            .from("artipilot_workspaces")
-            .insert(workspacePayload)
-            .select("id")
-            .single();
+if (!response.ok || !result?.ok) {
+  throw new Error(result?.error || "Workspace could not be saved.");
+}
 
-          if (insertError) {
-            throw insertError;
-          }
+const workspaceId = result.workspace?.id;
 
-          workspaceId = data.id;
-        }
+if (!workspaceId) {
+  throw new Error("Workspace was saved but no workspace ID was returned.");
+}
 
         const workspaceData = {
           id: workspaceId,

@@ -9,6 +9,32 @@ type WorkspaceRow = {
   owner_user_id: string;
 };
 
+type WhatsAppConnectionRow = {
+  id: string;
+  workspace_id: string;
+  owner_user_id: string;
+  provider: string | null;
+  status: string | null;
+  waba_id: string | null;
+  business_id?: string | null;
+  meta_business_id?: string | null;
+  phone_number_id: string | null;
+  display_phone_number: string | null;
+  verified_name: string | null;
+  access_token: string | null;
+  token_type: string | null;
+  token_expires_at: string | null;
+};
+
+type WhatsAppSender = {
+  source: "embedded_signup" | "manual_env";
+  accessToken: string;
+  phoneNumberId: string;
+  connectionId: string | null;
+  displayPhoneNumber: string | null;
+  verifiedName: string | null;
+};
+
 type WhatsAppSendResponse = {
   messages?: {
     id?: string;
@@ -35,12 +61,12 @@ function normalizePhone(phone: string) {
   return String(phone || "").replace(/[^\d]/g, "");
 }
 
-function getAccessToken() {
-  return process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN;
+function getEnvAccessToken() {
+  return process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN || "";
 }
 
-function getPhoneNumberId() {
-  return process.env.WHATSAPP_PHONE_NUMBER_ID;
+function getEnvPhoneNumberId() {
+  return process.env.WHATSAPP_PHONE_NUMBER_ID || "";
 }
 
 function hasColumnError(error: unknown) {
@@ -56,6 +82,24 @@ function hasColumnError(error: unknown) {
     message.includes("schema cache") ||
     message.includes("could not find") ||
     message.includes("does not exist")
+  );
+}
+
+function isUsableEmbeddedConnection(connection: WhatsAppConnectionRow | null) {
+  if (!connection) return false;
+
+  const status = String(connection.status || "").toLowerCase().trim();
+
+  const statusLooksOk =
+    status === "connected" ||
+    status === "active" ||
+    status === "ready" ||
+    status === "approved";
+
+  return Boolean(
+    statusLooksOk &&
+      connection.access_token &&
+      connection.phone_number_id
   );
 }
 
@@ -95,6 +139,102 @@ async function getWorkspaceForUser(userId: string) {
   return (data as WorkspaceRow | null) || null;
 }
 
+async function getWorkspaceWhatsAppConnection(workspace: WorkspaceRow) {
+  const { data, error } = await supabaseAdmin
+    .from("artipilot_whatsapp_connections")
+    .select(
+      "id, workspace_id, owner_user_id, provider, status, waba_id, business_id, phone_number_id, display_phone_number, verified_name, access_token, token_type, token_expires_at"
+    )
+    .eq("workspace_id", workspace.id)
+    .eq("owner_user_id", workspace.owner_user_id)
+    .order("last_connected_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!error) {
+    return (data as WhatsAppConnectionRow | null) || null;
+  }
+
+  if (hasColumnError(error)) {
+    console.warn(
+      "WhatsApp connection lookup used fallback because of schema difference:",
+      error.message
+    );
+
+    const fallback = await supabaseAdmin
+      .from("artipilot_whatsapp_connections")
+      .select("*")
+      .eq("workspace_id", workspace.id)
+      .eq("owner_user_id", workspace.owner_user_id)
+      .limit(1)
+      .maybeSingle();
+
+    if (fallback.error) {
+      console.error("WhatsApp connection fallback lookup error:", fallback.error);
+      return null;
+    }
+
+    return (fallback.data as WhatsAppConnectionRow | null) || null;
+  }
+
+  console.error("WhatsApp connection lookup error:", error);
+  return null;
+}
+
+function getManualEnvSender(): WhatsAppSender | null {
+  const accessToken = getEnvAccessToken();
+  const phoneNumberId = getEnvPhoneNumberId();
+
+  if (!accessToken || !phoneNumberId) {
+    return null;
+  }
+
+  return {
+    source: "manual_env",
+    accessToken,
+    phoneNumberId,
+    connectionId: null,
+    displayPhoneNumber: null,
+    verifiedName: null,
+  };
+}
+
+async function resolveWhatsAppSender(
+  workspace: WorkspaceRow
+): Promise<WhatsAppSender> {
+  const connection = await getWorkspaceWhatsAppConnection(workspace);
+
+  if (isUsableEmbeddedConnection(connection)) {
+    return {
+      source: "embedded_signup",
+      accessToken: String(connection?.access_token || ""),
+      phoneNumberId: String(connection?.phone_number_id || ""),
+      connectionId: connection?.id || null,
+      displayPhoneNumber: connection?.display_phone_number || null,
+      verifiedName: connection?.verified_name || null,
+    };
+  }
+
+  const fallback = getManualEnvSender();
+
+  if (fallback) {
+    console.log("WhatsApp send using manual .env fallback", {
+      workspaceId: workspace.id,
+      hasConnection: Boolean(connection?.id),
+      connectionStatus: connection?.status || null,
+      connectionHasToken: Boolean(connection?.access_token),
+      connectionHasPhoneNumberId: Boolean(connection?.phone_number_id),
+    });
+
+    return fallback;
+  }
+
+  throw new Error(
+    "No usable WhatsApp sender found. Connect WhatsApp with Meta or set WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID."
+  );
+}
+
 function sanitizeWhatsAppText(message: string) {
   return String(message || "")
     .replace(/\r\n/g, "\n")
@@ -103,29 +243,20 @@ function sanitizeWhatsAppText(message: string) {
 }
 
 async function sendWhatsAppText({
+  sender,
   to,
   message,
 }: {
+  sender: WhatsAppSender;
   to: string;
   message: string;
 }) {
-  const accessToken = getAccessToken();
-  const phoneNumberId = getPhoneNumberId();
-
-  if (!accessToken) {
-    throw new Error("Missing WHATSAPP_ACCESS_TOKEN or WHATSAPP_TOKEN");
-  }
-
-  if (!phoneNumberId) {
-    throw new Error("Missing WHATSAPP_PHONE_NUMBER_ID");
-  }
-
   const whatsappRes = await fetch(
-    `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`,
+    `https://graph.facebook.com/v25.0/${sender.phoneNumberId}/messages`,
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${sender.accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -144,7 +275,12 @@ async function sendWhatsAppText({
   const whatsappData = (await whatsappRes.json()) as WhatsAppSendResponse;
 
   if (!whatsappRes.ok) {
-    console.error("WhatsApp manual send error:", whatsappData);
+    console.error("WhatsApp manual send error:", {
+      source: sender.source,
+      phoneNumberId: sender.phoneNumberId,
+      connectionId: sender.connectionId,
+      whatsappData,
+    });
 
     const errorMessage =
       whatsappData?.error?.message ||
@@ -163,6 +299,7 @@ async function saveOutgoingMessage({
   to,
   message,
   whatsappData,
+  sender,
   now,
 }: {
   workspace: WorkspaceRow;
@@ -170,9 +307,21 @@ async function saveOutgoingMessage({
   to: string;
   message: string;
   whatsappData: WhatsAppSendResponse;
+  sender: WhatsAppSender;
   now: string;
 }): Promise<MessageInsertResult> {
   const whatsappMessageId = whatsappData?.messages?.[0]?.id || null;
+
+  const rawPayload = {
+    ...whatsappData,
+    artipilot_sender: {
+      source: sender.source,
+      connection_id: sender.connectionId,
+      phone_number_id: sender.phoneNumberId,
+      display_phone_number: sender.displayPhoneNumber,
+      verified_name: sender.verifiedName,
+    },
+  };
 
   const fullPayload = {
     workspace_id: workspace.id,
@@ -183,7 +332,7 @@ async function saveOutgoingMessage({
     direction: "outbound",
     message_type: "text",
     content: message,
-    raw_payload: whatsappData,
+    raw_payload: rawPayload,
     created_at: now,
 
     delivery_status: whatsappMessageId ? "sent" : "failed",
@@ -218,7 +367,7 @@ async function saveOutgoingMessage({
     direction: "outbound",
     message_type: "text",
     content: message,
-    raw_payload: whatsappData,
+    raw_payload: rawPayload,
     created_at: now,
   };
 
@@ -253,7 +402,10 @@ async function saveOutgoingMessage({
     .maybeSingle();
 
   if (fallbackError) {
-    console.error("Error saving outgoing manual message fallback:", fallbackError);
+    console.error(
+      "Error saving outgoing manual message fallback:",
+      fallbackError
+    );
   }
 
   return {
@@ -316,7 +468,10 @@ async function updateOrCreateContactAfterManualSend({
       return existingContact.id;
     }
 
-    console.warn("Manual send contact update fallback used:", updateError.message);
+    console.warn(
+      "Manual send contact update fallback used:",
+      updateError.message
+    );
 
     const { error: fallbackError } = await supabaseAdmin
       .from("artipilot_contacts")
@@ -324,7 +479,10 @@ async function updateOrCreateContactAfterManualSend({
       .eq("id", existingContact.id);
 
     if (fallbackError) {
-      console.error("Error updating contact after manual send fallback:", fallbackError);
+      console.error(
+        "Error updating contact after manual send fallback:",
+        fallbackError
+      );
     }
 
     return existingContact.id;
@@ -385,7 +543,10 @@ async function updateOrCreateContactAfterManualSend({
     .maybeSingle();
 
   if (fallbackError) {
-    console.error("Error creating contact after manual send fallback:", fallbackError);
+    console.error(
+      "Error creating contact after manual send fallback:",
+      fallbackError
+    );
   }
 
   return fallbackData?.id || null;
@@ -449,7 +610,10 @@ export async function POST(req: NextRequest) {
 
     const now = new Date().toISOString();
 
+    const sender = await resolveWhatsAppSender(workspace);
+
     const whatsappData = await sendWhatsAppText({
+      sender,
       to,
       message: cleanMessage,
     });
@@ -460,6 +624,7 @@ export async function POST(req: NextRequest) {
       to,
       message: cleanMessage,
       whatsappData,
+      sender,
       now,
     });
 
@@ -476,6 +641,13 @@ export async function POST(req: NextRequest) {
         success: true,
         whatsappMessageId,
         message,
+        sender: {
+          source: sender.source,
+          connectionId: sender.connectionId,
+          phoneNumberId: sender.phoneNumberId,
+          displayPhoneNumber: sender.displayPhoneNumber,
+          verifiedName: sender.verifiedName,
+        },
       },
       {
         status: 200,

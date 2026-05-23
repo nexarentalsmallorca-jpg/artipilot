@@ -19,27 +19,51 @@ function cleanOffer(offer: string | null) {
   return "first-month-1eur";
 }
 
+function getSafeNextPath(next: string | null) {
+  if (!next) return null;
+
+  try {
+    const decoded = decodeURIComponent(next).trim();
+
+    // Important security check:
+    // only allow internal redirects like /setup or /dashboard
+    if (!decoded.startsWith("/") || decoded.startsWith("//")) {
+      return null;
+    }
+
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
+function buildUrl(request: NextRequest, path: string) {
+  return new URL(path, request.url);
+}
+
 export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url);
+
   const code = requestUrl.searchParams.get("code");
+  const nextPath = getSafeNextPath(requestUrl.searchParams.get("next"));
 
   const selectedPlan = cleanPlan(requestUrl.searchParams.get("plan"));
   const selectedOffer = cleanOffer(requestUrl.searchParams.get("offer"));
 
+  const fallbackSetupPath = `/setup?plan=${selectedPlan}&offer=${selectedOffer}`;
+  const signupPath = `/signup?plan=${selectedPlan}&offer=${selectedOffer}`;
+
+  const dashboardUrl = buildUrl(request, "/dashboard");
+  const setupUrl = buildUrl(request, nextPath || fallbackSetupPath);
+  const signupUrl = buildUrl(request, signupPath);
+
   if (!code) {
-    return NextResponse.redirect(new URL("/signup", request.url));
+    return NextResponse.redirect(signupUrl);
   }
 
-  const dashboardUrl = new URL("/dashboard", request.url);
-  const setupUrl = new URL("/setup", request.url);
-  setupUrl.searchParams.set("plan", selectedPlan);
-  setupUrl.searchParams.set("offer", selectedOffer);
-
-  const signupUrl = new URL("/signup", request.url);
-  signupUrl.searchParams.set("plan", selectedPlan);
-  signupUrl.searchParams.set("offer", selectedOffer);
-
-  const response = NextResponse.redirect(dashboardUrl);
+  // Start with setup as default, not dashboard.
+  // We will change it later only if workspace is already completed.
+  const response = NextResponse.redirect(setupUrl);
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -93,16 +117,19 @@ export async function GET(request: NextRequest) {
     return response;
   }
 
+  // If user has no workspace, always send to setup.
   if (!existingWorkspace?.id) {
     response.headers.set("Location", setupUrl.toString());
     return response;
   }
 
+  // If workspace exists but setup is not complete, send to setup.
   if (!existingWorkspace.setup_completed) {
     response.headers.set("Location", setupUrl.toString());
     return response;
   }
 
+  // If setup is already completed, send to dashboard.
   response.headers.set("Location", dashboardUrl.toString());
   return response;
 }
