@@ -3,68 +3,77 @@
 import { useEffect, useState } from "react";
 
 type Status = {
-  private_domain: string;
-  security: string;
-  supabase: boolean;
-  openai: boolean;
-  whatsapp: {
-    configured: boolean;
-    phone_number_id: string | null;
-    verify_token_set: boolean;
-  };
-  webhook_url: string;
-  last_inbound_at: string | null;
-  last_outbound_at: string | null;
-  total_contacts: number;
-  total_messages: number;
-  total_ai_on_contacts: number;
+  supabaseConfigured: boolean;
+  whatsappTokenConfigured: boolean;
+  whatsappPhoneNumberIdConfigured: boolean;
+  openaiConfigured: boolean;
+  whatsappConfigured: boolean;
+  webhookUrl: string;
+  totalContacts: number;
+  totalMessages: number;
+  lastMessageAt: string | null;
+  privateDomain: string;
 };
 
 export default function StatusClient() {
   const [status, setStatus] = useState<Status | null>(null);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     fetch("/api/status", { credentials: "include" })
-      .then((r) => r.json())
-      .then(setStatus)
-      .catch(() => undefined);
+      .then(async (r) => {
+        const data = await r.json();
+        if (!r.ok) {
+          setError(data.error || "Failed to load status");
+          return;
+        }
+        setStatus(data);
+      })
+      .catch(() => setError("Network error"));
   }, []);
 
-  if (!status) {
-    return <p className="p-6 text-[#8696A0]">Loading status…</p>;
+  if (error) {
+    return <p className="text-red-300">{error}</p>;
   }
 
-  const rows = [
-    ["Supabase", status.supabase ? "Configured" : "Missing"],
-    ["OpenAI", status.openai ? "Configured" : "Missing"],
+  if (!status) {
+    return <p className="text-[#8696A0]">Loading status…</p>;
+  }
+
+  const rows: [string, string][] = [
+    ["Supabase", status.supabaseConfigured ? "Configured" : "Missing"],
+    ["WhatsApp token", status.whatsappTokenConfigured ? "Configured" : "Missing"],
     [
-      "WhatsApp",
-      status.whatsapp.configured
-        ? `OK · Phone ID ${status.whatsapp.phone_number_id}`
-        : "Missing token or phone number ID",
+      "WhatsApp phone number ID",
+      status.whatsappPhoneNumberIdConfigured ? "Configured" : "Missing",
     ],
-    ["Verify token", status.whatsapp.verify_token_set ? "Set" : "Missing"],
-    ["Webhook URL", status.webhook_url],
-    ["Last inbound", status.last_inbound_at || "—"],
-    ["Last outbound", status.last_outbound_at || "—"],
-    ["Total contacts", String(status.total_contacts)],
-    ["Total messages", String(status.total_messages)],
-    ["AI ON contacts", String(status.total_ai_on_contacts)],
+    [
+      "WhatsApp ready to send",
+      status.whatsappConfigured ? "Yes" : "No — check token and phone number ID",
+    ],
+    ["OpenAI", status.openaiConfigured ? "Configured" : "Missing"],
+    ["Webhook URL", status.webhookUrl],
+    ["Private domain", status.privateDomain],
+    ["Total contacts", String(status.totalContacts)],
+    ["Total messages", String(status.totalMessages)],
+    ["Last message", status.lastMessageAt || "—"],
   ];
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-4 md:p-6">
-      <h1 className="text-2xl font-semibold">System Status</h1>
-      <p className="text-sm text-[#8696A0]">
-        Safe overview — no secrets are shown.
-      </p>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold text-white">System Status</h1>
+        <p className="mt-1 text-sm text-[#8696A0]">
+          Safe overview — secret values are never shown.
+        </p>
+      </div>
       <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#111B21]">
         <table className="w-full text-sm">
           <tbody>
             {rows.map(([label, value]) => (
               <tr key={label} className="border-b border-white/5 last:border-0">
                 <td className="px-4 py-3 font-medium text-[#8696A0]">{label}</td>
-                <td className="px-4 py-3 break-all">{value}</td>
+                <td className="px-4 py-3 break-all text-[#e9edef]">{value}</td>
               </tr>
             ))}
           </tbody>

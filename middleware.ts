@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  PRIVATE_SESSION_COOKIE,
+  PRIVATE_SESSION_VALUE,
+} from "@/lib/auth/private-session";
 
 const PUBLIC_FILE = /\.(.*)$/;
-const SESSION_COOKIE = "artipilot_private_session";
-const SESSION_VALUE = "authenticated";
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -17,7 +19,8 @@ export function middleware(request: NextRequest) {
     hostname === "artipilot.com" || hostname === "www.artipilot.com";
 
   const isLoggedIn =
-    request.cookies.get(SESSION_COOKIE)?.value === SESSION_VALUE;
+    request.cookies.get(PRIVATE_SESSION_COOKIE)?.value ===
+    PRIVATE_SESSION_VALUE;
 
   const isStaticFile =
     pathname.startsWith("/_next") ||
@@ -30,7 +33,8 @@ export function middleware(request: NextRequest) {
 
   if (
     pathname.startsWith("/api/whatsapp/webhook") ||
-    pathname.startsWith("/api/auth/private-login")
+    pathname.startsWith("/api/auth/private-login") ||
+    pathname.startsWith("/api/debug-host")
   ) {
     return NextResponse.next();
   }

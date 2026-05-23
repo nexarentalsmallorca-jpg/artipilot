@@ -146,9 +146,6 @@ export async function handleWhatsAppWebhookPost(request: NextRequest) {
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Webhook handler error:", error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Webhook failed" },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: true, logged_error: true });
   }
 }

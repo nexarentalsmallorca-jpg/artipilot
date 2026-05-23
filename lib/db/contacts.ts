@@ -134,6 +134,21 @@ export async function setContactAiEnabled(contactId: string, enabled: boolean) {
   return data as Contact;
 }
 
+export async function createManualContact(input: {
+  phone: string;
+  name?: string | null;
+}): Promise<Contact> {
+  const phone = normalizePhone(input.phone);
+  if (!phone) {
+    throw new Error("Phone number is required");
+  }
+  return upsertContactFromWhatsApp({
+    whatsappId: phone,
+    phone,
+    profileName: input.name || null,
+  });
+}
+
 export async function updateContactFields(
   contactId: string,
   fields: Partial<Pick<Contact, "archived" | "blocked" | "notes" | "name">>

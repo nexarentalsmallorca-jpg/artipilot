@@ -50,7 +50,7 @@ export async function sendWhatsAppText(
   }
 
   const res = await fetch(
-    `https://graph.facebook.com/v25.0/${config.phoneNumberId}/messages`,
+    `https://graph.facebook.com/v20.0/${config.phoneNumberId}/messages`,
     {
       method: "POST",
       headers: {

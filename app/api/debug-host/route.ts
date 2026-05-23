@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
   const host = request.headers.get("host") || "";
   const hostname = host.split(":")[0].toLowerCase();
@@ -7,14 +9,11 @@ export async function GET(request: NextRequest) {
   const privateHost =
     process.env.PRIVATE_DASHBOARD_HOST || "private.artipilot.com";
 
+  const hasPrivateHostEnv = Boolean(process.env.PRIVATE_DASHBOARD_HOST?.trim());
+
   return NextResponse.json({
-    host,
     hostname,
-    PRIVATE_DASHBOARD_HOST: process.env.PRIVATE_DASHBOARD_HOST || null,
-    privateHost,
     isPrivateHost: hostname === privateHost,
-    isPublicHost:
-      hostname === "artipilot.com" || hostname === "www.artipilot.com",
-    timestamp: new Date().toISOString(),
+    PRIVATE_DASHBOARD_HOST: hasPrivateHostEnv ? "set" : "not set (using default)",
   });
 }
