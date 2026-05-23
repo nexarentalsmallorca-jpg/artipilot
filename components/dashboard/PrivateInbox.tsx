@@ -48,7 +48,10 @@ export default function PrivateInbox() {
       const q = contactId ? `?contact_id=${encodeURIComponent(contactId)}` : "";
       const res = await fetch(`/api/inbox${q}`, { credentials: "include" });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to load inbox");
+      if (!res.ok) {
+        const msg = [data.error, data.hint].filter(Boolean).join(" — ");
+        throw new Error(msg || "Failed to load inbox");
+      }
       setContacts(data.contacts || []);
       if (contactId) setMessages(data.messages || []);
       setError("");
