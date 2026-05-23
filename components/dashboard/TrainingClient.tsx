@@ -1,6 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import {
+  fetchPrivateApi,
+  parsePrivateApiError,
+  privateApiErrorLabel,
+} from "@/lib/dashboard/privateFetch";
 
 type Item = {
   id: string;
@@ -20,14 +25,19 @@ export default function TrainingClient() {
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
+    setError("");
     const q = search.trim() ? `?q=${encodeURIComponent(search.trim())}` : "";
-    const res = await fetch(`/api/training${q}`, { credentials: "include" });
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error || "Failed to load");
-      return;
+    try {
+      const res = await fetchPrivateApi(`/api/training${q}`, { method: "GET" });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(await parsePrivateApiError("Training", res));
+        return;
+      }
+      setItems(data.items || []);
+    } catch {
+      setError(privateApiErrorLabel("Training", "Network error"));
     }
-    setItems(data.items || []);
   }, [search]);
 
   useEffect(() => {
@@ -35,42 +45,53 @@ export default function TrainingClient() {
   }, [load]);
 
   async function save() {
+    setError("");
     const method = editingId ? "PATCH" : "POST";
     const body = editingId
       ? { id: editingId, title, category, content, active: true }
       : { title, category, content, active: true };
-    const res = await fetch("/api/training", {
-      method,
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const data = await res.json();
-      setError(data.error || "Save failed");
-      return;
+    try {
+      const res = await fetchPrivateApi("/api/training", {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        setError(await parsePrivateApiError("Training", res));
+        return;
+      }
+      setTitle("");
+      setContent("");
+      setEditingId(null);
+      void load();
+    } catch {
+      setError(privateApiErrorLabel("Training", "Network error"));
     }
-    setTitle("");
-    setContent("");
-    setEditingId(null);
-    void load();
   }
 
   async function toggleActive(item: Item) {
-    await fetch("/api/training", {
+    setError("");
+    const res = await fetchPrivateApi("/api/training", {
       method: "PATCH",
-      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: item.id, active: !item.active }),
     });
+    if (!res.ok) {
+      setError(await parsePrivateApiError("Training", res));
+      return;
+    }
     void load();
   }
 
   async function remove(id: string) {
-    await fetch(`/api/training?id=${id}`, {
+    setError("");
+    const res = await fetchPrivateApi(`/api/training?id=${encodeURIComponent(id)}`, {
       method: "DELETE",
-      credentials: "include",
     });
+    if (!res.ok) {
+      setError(await parsePrivateApiError("Training", res));
+      return;
+    }
     void load();
   }
 

@@ -1,6 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import {
+  fetchPrivateApi,
+  parsePrivateApiError,
+  privateApiErrorLabel,
+} from "@/lib/dashboard/privateFetch";
 
 type Item = {
   id: string;
@@ -15,11 +20,21 @@ export default function QuickRepliesClient() {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [error, setError] = useState("");
 
   const load = useCallback(async () => {
-    const res = await fetch("/api/quick-replies", { credentials: "include" });
-    const data = await res.json();
-    setItems(data.items || []);
+    setError("");
+    try {
+      const res = await fetchPrivateApi("/api/quick-replies", { method: "GET" });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(await parsePrivateApiError("Quick replies", res));
+        return;
+      }
+      setItems(data.items || []);
+    } catch {
+      setError(privateApiErrorLabel("Quick replies", "Network error"));
+    }
   }, []);
 
   useEffect(() => {
@@ -27,20 +42,18 @@ export default function QuickRepliesClient() {
   }, [load]);
 
   async function save() {
-    if (editingId) {
-      await fetch("/api/quick-replies", {
-        method: "PATCH",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: editingId, title, content, active: true }),
-      });
-    } else {
-      await fetch("/api/quick-replies", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, content, active: true }),
-      });
+    setError("");
+    const payload = editingId
+      ? { id: editingId, title, content, active: true }
+      : { title, content, active: true };
+    const res = await fetchPrivateApi("/api/quick-replies", {
+      method: editingId ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      setError(await parsePrivateApiError("Quick replies", res));
+      return;
     }
     setTitle("");
     setContent("");
@@ -49,26 +62,40 @@ export default function QuickRepliesClient() {
   }
 
   async function toggle(item: Item) {
-    await fetch("/api/quick-replies", {
+    setError("");
+    const res = await fetchPrivateApi("/api/quick-replies", {
       method: "PATCH",
-      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: item.id, active: !item.active }),
     });
+    if (!res.ok) {
+      setError(await parsePrivateApiError("Quick replies", res));
+      return;
+    }
     void load();
   }
 
   async function remove(id: string) {
-    await fetch(`/api/quick-replies?id=${id}`, {
+    setError("");
+    const res = await fetchPrivateApi(`/api/quick-replies?id=${encodeURIComponent(id)}`, {
       method: "DELETE",
-      credentials: "include",
     });
+    if (!res.ok) {
+      setError(await parsePrivateApiError("Quick replies", res));
+      return;
+    }
     void load();
   }
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-4 md:p-6">
       <h1 className="text-2xl font-semibold">Quick Replies</h1>
+
+      {error ? (
+        <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          {error}
+        </p>
+      ) : null}
 
       <div className="rounded-2xl border border-white/10 bg-[#111B21] p-4 space-y-3">
         <input

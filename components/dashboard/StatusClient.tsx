@@ -1,6 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import {
+  fetchPrivateApi,
+  parsePrivateApiError,
+  privateApiErrorLabel,
+} from "@/lib/dashboard/privateFetch";
 
 type Status = {
   supabaseConfigured: boolean;
@@ -20,16 +25,19 @@ export default function StatusClient() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch("/api/status", { credentials: "include" })
-      .then(async (r) => {
-        const data = await r.json();
-        if (!r.ok) {
-          setError(data.error || "Failed to load status");
+    void (async () => {
+      try {
+        const res = await fetchPrivateApi("/api/status", { method: "GET" });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(await parsePrivateApiError("Status", res));
           return;
         }
         setStatus(data);
-      })
-      .catch(() => setError("Network error"));
+      } catch {
+        setError(privateApiErrorLabel("Status", "Network error"));
+      }
+    })();
   }, []);
 
   if (error) {

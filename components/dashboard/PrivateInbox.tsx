@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Contact, Message } from "@/lib/db/types";
+import {
+  fetchPrivateApi,
+  parsePrivateApiError,
+  privateApiErrorLabel,
+} from "@/lib/dashboard/privateFetch";
 
 type ContactRow = Contact & { last_message_preview?: string };
 
@@ -46,15 +51,10 @@ export default function PrivateInbox() {
   const loadInbox = useCallback(async (contactId?: string | null) => {
     try {
       const q = contactId ? `?contact_id=${encodeURIComponent(contactId)}` : "";
-      const res = await fetch(`/api/inbox${q}`, {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      });
+      const res = await fetchPrivateApi(`/api/inbox${q}`, { method: "GET" });
       const data = await res.json();
       if (!res.ok) {
-        const msg = [data.error, data.hint].filter(Boolean).join(" — ");
-        throw new Error(msg || "Failed to load inbox");
+        throw new Error(await parsePrivateApiError("Inbox", res));
       }
       setContacts(data.contacts || []);
       if (contactId) setMessages(data.messages || []);
@@ -73,10 +73,19 @@ export default function PrivateInbox() {
   }, [selectedId, loadInbox]);
 
   useEffect(() => {
-    fetch("/api/quick-replies", { credentials: "include" })
-      .then((r) => r.json())
-      .then((d) => setQuickReplies((d.items || []).filter((x: { active: boolean }) => x.active)))
-      .catch(() => undefined);
+    void (async () => {
+      try {
+        const res = await fetchPrivateApi("/api/quick-replies", { method: "GET" });
+        const d = await res.json();
+        if (!res.ok) {
+          setError(await parsePrivateApiError("Quick replies", res));
+          return;
+        }
+        setQuickReplies((d.items || []).filter((x: { active: boolean }) => x.active));
+      } catch {
+        setError(privateApiErrorLabel("Quick replies", "Network error"));
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -105,14 +114,14 @@ export default function PrivateInbox() {
     if (!selectedId || !composer.trim()) return;
     setSending(true);
     try {
-      const res = await fetch("/api/whatsapp/send", {
+      const res = await fetchPrivateApi("/api/whatsapp/send", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ contact_id: selectedId, body: composer.trim() }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Send failed");
+      if (!res.ok) {
+        throw new Error(await parsePrivateApiError("WhatsApp send", res));
+      }
       setComposer("");
       await loadInbox(selectedId);
     } catch (e) {

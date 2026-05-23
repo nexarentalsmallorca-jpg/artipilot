@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { AiSettingsMap } from "@/lib/db/types";
+import {
+  fetchPrivateApi,
+  parsePrivateApiError,
+  privateApiErrorLabel,
+} from "@/lib/dashboard/privateFetch";
 
 export default function SettingsClient() {
   const [settings, setSettings] = useState<AiSettingsMap>({});
@@ -10,10 +15,19 @@ export default function SettingsClient() {
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
-    const res = await fetch("/api/settings/ai", { credentials: "include" });
-    const data = await res.json();
-    if (data.settings) setSettings(data.settings);
-    if (data.meta) setMeta(data.meta);
+    setNotice("");
+    try {
+      const res = await fetchPrivateApi("/api/settings/ai", { method: "GET" });
+      const data = await res.json();
+      if (!res.ok) {
+        setNotice(await parsePrivateApiError("Settings", res));
+        return;
+      }
+      if (data.settings) setSettings(data.settings);
+      if (data.meta) setMeta(data.meta);
+    } catch {
+      setNotice(privateApiErrorLabel("Settings", "Network error"));
+    }
   }, []);
 
   useEffect(() => {
@@ -23,19 +37,22 @@ export default function SettingsClient() {
   async function save() {
     setSaving(true);
     setNotice("");
-    const res = await fetch("/api/settings/ai", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(settings),
-    });
-    setSaving(false);
-    if (res.ok) {
-      setNotice("Settings saved.");
-      void load();
-    } else {
-      const data = await res.json();
-      setNotice(data.error || "Save failed");
+    try {
+      const res = await fetchPrivateApi("/api/settings/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+      });
+      if (res.ok) {
+        setNotice("Settings saved.");
+        void load();
+      } else {
+        setNotice(await parsePrivateApiError("Settings", res));
+      }
+    } catch {
+      setNotice(privateApiErrorLabel("Settings", "Network error"));
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -94,7 +111,15 @@ export default function SettingsClient() {
         >
           {saving ? "Saving…" : "Save settings"}
         </button>
-        {notice ? <p className="text-sm text-[#8696A0]">{notice}</p> : null}
+        {notice ? (
+          <p
+            className={`text-sm ${
+              notice.includes("error:") ? "text-red-300" : "text-[#8696A0]"
+            }`}
+          >
+            {notice}
+          </p>
+        ) : null}
       </div>
     </div>
   );

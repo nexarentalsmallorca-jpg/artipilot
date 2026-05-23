@@ -11,6 +11,11 @@ import {
 } from "react";
 import { useSearchParams } from "next/navigation";
 import {
+  fetchPrivateApi,
+  parsePrivateApiError,
+  privateApiErrorLabel,
+} from "@/lib/dashboard/privateFetch";
+import {
   canTranslateMessage,
   cleanPhone,
   displayName,
@@ -225,16 +230,13 @@ export function useInbox() {
   const loadInbox = useCallback(
     async (silent = false) => {
       try {
-        const res = await fetch("/api/inbox", {
-          method: "GET",
-          credentials: "include",
-          cache: "no-store",
-        });
+        const res = await fetchPrivateApi("/api/inbox", { method: "GET" });
         const data: InboxData = await res.json();
         if (!res.ok) {
+          const labeled = await parsePrivateApiError("Inbox", res);
           setLoadError((previous) => {
             if (silent && contacts.length > 0) return previous;
-            return data?.error || "Failed to load inbox.";
+            return labeled;
           });
           return;
         }
@@ -260,7 +262,7 @@ export function useInbox() {
         }
       } catch (error) {
         console.error("Failed to load inbox:", error);
-        setLoadError("Could not load inbox. Check /api/inbox and Supabase.");
+        setLoadError(privateApiErrorLabel("Inbox", "Network error"));
       } finally {
         if (!silent) setLoading(false);
       }
@@ -284,9 +286,8 @@ export function useInbox() {
 
   async function updateContactForPhone(phone: string, payload: Record<string, unknown>) {
     try {
-      const res = await fetch("/api/inbox/contact", {
+      const res = await fetchPrivateApi("/api/inbox/contact", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: cleanPhone(phone), ...payload }),
       });
@@ -304,9 +305,8 @@ export function useInbox() {
       )
     );
     try {
-      await fetch("/api/inbox/mark-read", {
+      await fetchPrivateApi("/api/inbox/mark-read", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: cleanPhone(phone) }),
       });
@@ -380,21 +380,19 @@ export function useInbox() {
         )
       );
       setManualReply("");
-      const res = await fetch("/api/whatsapp/send", {
+      const res = await fetchPrivateApi("/api/whatsapp/send", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ to: cleanPhone(selectedContact.phone), message: text }),
       });
-      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setSendError(data?.error || "Failed to send message.");
+        setSendError(await parsePrivateApiError("WhatsApp send", res));
         return;
       }
       await loadInbox(true);
     } catch (error) {
       console.error("Manual reply error:", error);
-      setSendError("Something went wrong while sending.");
+      setSendError(privateApiErrorLabel("WhatsApp send", "Network error"));
     } finally {
       setSending(false);
     }
@@ -417,7 +415,9 @@ export function useInbox() {
       )
     );
     const ok = await updateContactForPhone(selectedContact.phone, { ai_enabled: nextValue });
-    if (!ok) setSendError("Could not save AI status. Check /api/inbox/contact.");
+    if (!ok) {
+      setSendError(privateApiErrorLabel("Contact update", "Could not save AI status"));
+    }
     setAiToggleSaving(false);
   }
 
@@ -499,9 +499,8 @@ export function useInbox() {
     const confirmed = window.confirm(`Delete chat with ${displayName(selectedContact)}?`);
     if (!confirmed) return;
     try {
-      await fetch("/api/inbox/delete-chat", {
+      await fetchPrivateApi("/api/inbox/delete-chat", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: cleanPhone(selectedContact.phone) }),
       });
@@ -519,9 +518,8 @@ export function useInbox() {
     if (!selectedContact) return setSendError("Select a chat first.");
     try {
       setLocalNotice("Generating AI suggestion...");
-      const res = await fetch("/api/inbox/ai-suggestion", {
+      const res = await fetchPrivateApi("/api/inbox/ai-suggestion", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           phone: cleanPhone(selectedContact.phone),
@@ -532,8 +530,14 @@ export function useInbox() {
       const fallback = selectedContact.last_message
         ? "Thank you for your message. I'll check this and get back to you shortly."
         : "Hello, thank you for contacting us. How can I help you today?";
+      if (!res.ok) {
+        setSendError(await parsePrivateApiError("AI suggestion", res));
+        setManualReply(fallback);
+        setLocalNotice("AI suggestion failed — safe reply added.");
+        return;
+      }
       setManualReply(data?.suggestion ? String(data.suggestion) : fallback);
-      setLocalNotice(data?.suggestion ? "AI suggestion added." : "AI suggestion API not ready, safe reply added.");
+      setLocalNotice(data?.suggestion ? "AI suggestion added." : "AI suggestion empty — safe reply added.");
     } catch {
       setManualReply("Thank you for your message. I'll check this and get back to you shortly.");
       setLocalNotice("AI suggestion API not ready, safe reply added.");
@@ -567,9 +571,8 @@ export function useInbox() {
       if (translatingMap[key]) return;
       try {
         setTranslatingMap((previous) => ({ ...previous, [key]: true }));
-        const res = await fetch("/api/inbox/translate", {
+        const res = await fetchPrivateApi("/api/inbox/translate", {
           method: "POST",
-          credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             messageId: message.id,
@@ -625,7 +628,7 @@ export function useInbox() {
       setLocalNotice("Media sent.");
       await loadInbox(true);
     } catch {
-      setSendError("Media upload failed.");
+      setSendError(privateApiErrorLabel("Media upload", "Network error"));
     } finally {
       setSending(false);
     }
@@ -647,15 +650,14 @@ export function useInbox() {
 
   async function deleteMessage(message: Message, mode: "me" | "everyone") {
     try {
-      const res = await fetch(`/api/messages/${message.id}/delete`, {
+      const res = await fetchPrivateApi(`/api/messages/${message.id}/delete`, {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setSendError(data?.error || "Could not delete message.");
+        setSendError(await parsePrivateApiError("Message delete", res));
         return;
       }
       if (mode === "everyone" && data?.warning) {
