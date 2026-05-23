@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getWorkspaceIdForAdmin, requireAdminApiUser } from "@/lib/auth/api";
+import { getPrivateDashboardWorkspace } from "@/lib/auth/dashboardAccess";
+import { hasPrivateSessionFromRequest } from "@/lib/auth/private-session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { DB } from "@/lib/db/tables";
 
@@ -28,10 +29,12 @@ function detectWhatsAppType(mime: string, filename: string) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = await requireAdminApiUser(request);
-  if (auth.error) return auth.error;
+  if (!hasPrivateSessionFromRequest(request)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
-  const workspaceId = await getWorkspaceIdForAdmin(auth.user.id, request);
+  const workspace = await getPrivateDashboardWorkspace();
+  const workspaceId = workspace?.id;
   if (!workspaceId) {
     return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
   }
@@ -83,7 +86,10 @@ export async function POST(request: NextRequest) {
     }
   );
 
-  const mediaUploadData = (await mediaUploadRes.json()) as { id?: string; error?: { message?: string } };
+  const mediaUploadData = (await mediaUploadRes.json()) as {
+    id?: string;
+    error?: { message?: string };
+  };
   const mediaId = mediaUploadData.id;
 
   if (!mediaUploadRes.ok || !mediaId) {
@@ -138,7 +144,7 @@ export async function POST(request: NextRequest) {
     .from(DB.messages)
     .insert({
       workspace_id: workspaceId,
-      owner_user_id: auth.user.id,
+      owner_user_id: workspace.owner_user_id,
       contact_phone: to,
       whatsapp_message_id: whatsappMessageId,
       role: "manual",

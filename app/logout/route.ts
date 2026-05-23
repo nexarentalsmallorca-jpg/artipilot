@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PRIVATE_SESSION_COOKIE } from "@/lib/auth/privateSession";
+import { PRIVATE_SESSION_COOKIE } from "@/lib/auth/private-session";
 
 export async function GET(request: NextRequest) {
   const response = NextResponse.redirect(new URL("/login", request.url));

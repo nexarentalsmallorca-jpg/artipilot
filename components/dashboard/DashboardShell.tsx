@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAV = [
+  { href: "/dashboard/inbox", label: "Home" },
   { href: "/dashboard/inbox", label: "Inbox" },
   { href: "/dashboard/training", label: "Training" },
   { href: "/dashboard/quick-replies", label: "Quick Replies" },
@@ -29,7 +30,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
               pathname === item.href || pathname.startsWith(`${item.href}/`);
             return (
               <Link
-                key={item.href}
+                key={item.label}
                 href={item.href}
                 className={`rounded-lg px-3 py-2.5 text-sm font-medium transition ${
                   active
@@ -65,7 +66,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
         <nav className="flex gap-1 overflow-x-auto border-b border-white/10 bg-[#111B21] px-2 py-2 md:hidden">
           {NAV.map((item) => (
             <Link
-              key={item.href}
+              key={item.label}
               href={item.href}
               className={`shrink-0 rounded-lg px-3 py-1.5 text-xs ${
                 pathname === item.href ? "bg-[#00A884]/15 text-[#00A884]" : "text-[#8696A0]"

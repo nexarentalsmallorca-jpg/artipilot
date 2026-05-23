@@ -1,17 +1,13 @@
 import { NextRequest } from "next/server";
 import type { User } from "@supabase/supabase-js";
 import { isAdminEmail } from "@/lib/auth/config";
-import {
-  isPrivateSessionCookie,
-  PRIVATE_SESSION_COOKIE,
-} from "@/lib/auth/privateSession";
+import { hasPrivateSessionFromRequest } from "@/lib/auth/private-session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const PRIVATE_DASHBOARD_ACTOR_ID = "private-dashboard-session";
 
 export function hasPrivateDashboardSession(request: NextRequest): boolean {
-  const value = request.cookies.get(PRIVATE_SESSION_COOKIE)?.value;
-  return isPrivateSessionCookie(value);
+  return hasPrivateSessionFromRequest(request);
 }
 
 export async function getUserFromBearer(request: NextRequest): Promise<User | null> {

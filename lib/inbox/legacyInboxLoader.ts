@@ -1,10 +1,6 @@
 ﻿import { NextRequest, NextResponse } from "next/server";
-import { isAdminEmail } from "@/lib/auth/config";
-import {
-  getPrivateDashboardWorkspace,
-  getUserFromBearer,
-  hasPrivateDashboardSession,
-} from "@/lib/auth/dashboardAccess";
+import { getPrivateDashboardWorkspace } from "@/lib/auth/dashboardAccess";
+import { hasPrivateSessionFromRequest } from "@/lib/auth/private-session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
@@ -179,27 +175,6 @@ function numberFromUnknown(value: unknown) {
   }
 
   return null;
-}
-
-async function getUserFromRequest(request: NextRequest) {
-  return getUserFromBearer(request);
-}
-
-async function getWorkspaceForUser(userId: string) {
-  const { data, error } = await supabaseAdmin
-    .from("artipilot_workspaces")
-    .select("id, owner_user_id")
-    .eq("owner_user_id", userId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    console.error("Inbox workspace error:", error);
-    return null;
-  }
-
-  return (data as WorkspaceRow | null) || null;
 }
 
 async function attachOldRowsToWorkspace({
@@ -422,15 +397,22 @@ function sortContactsForInbox(contacts: ContactRow[]) {
 async function loadContacts({
   workspace,
   userId,
+  workspaceOnly,
 }: {
   workspace: WorkspaceRow;
   userId: string;
+  workspaceOnly?: boolean;
 }) {
-  const { data, error } = await supabaseAdmin
+  let contactQuery = supabaseAdmin
     .from("artipilot_contacts")
     .select("*")
-    .eq("workspace_id", workspace.id)
-    .eq("owner_user_id", userId)
+    .eq("workspace_id", workspace.id);
+
+  if (!workspaceOnly) {
+    contactQuery = contactQuery.eq("owner_user_id", userId);
+  }
+
+  const { data, error } = await contactQuery
     .order("needs_human_attention", {
       ascending: false,
       nullsFirst: false,
@@ -456,15 +438,22 @@ async function loadContacts({
 
   console.warn("Inbox contacts fallback used:", error.message);
 
-  const { data: fallbackData, error: fallbackError } = await supabaseAdmin
+  let fallbackQuery = supabaseAdmin
     .from("artipilot_contacts")
     .select("*")
-    .eq("workspace_id", workspace.id)
-    .eq("owner_user_id", userId)
-    .order("last_message_at", {
+    .eq("workspace_id", workspace.id);
+
+  if (!workspaceOnly) {
+    fallbackQuery = fallbackQuery.eq("owner_user_id", userId);
+  }
+
+  const { data: fallbackData, error: fallbackError } = await fallbackQuery.order(
+    "last_message_at",
+    {
       ascending: false,
       nullsFirst: false,
-    });
+    }
+  );
 
   if (fallbackError) {
     console.error("Inbox contacts fallback error:", fallbackError);
@@ -481,16 +470,24 @@ async function loadContacts({
 async function loadMessages({
   workspace,
   userId,
+  workspaceOnly,
 }: {
   workspace: WorkspaceRow;
   userId: string;
+  workspaceOnly?: boolean;
 }) {
-  const { data, error } = await supabaseAdmin
+  let messageQuery = supabaseAdmin
     .from("artipilot_messages")
     .select("*")
-    .eq("workspace_id", workspace.id)
-    .eq("owner_user_id", userId)
-    .order("created_at", { ascending: true });
+    .eq("workspace_id", workspace.id);
+
+  if (!workspaceOnly) {
+    messageQuery = messageQuery.eq("owner_user_id", userId);
+  }
+
+  const { data, error } = await messageQuery.order("created_at", {
+    ascending: true,
+  });
 
   if (!error) {
     return ((data || []) as MessageRow[]).map(normalizeMessage);
@@ -503,14 +500,19 @@ async function loadMessages({
 
   console.warn("Inbox messages fallback used:", error.message);
 
-  const { data: fallbackData, error: fallbackError } = await supabaseAdmin
+  let fallbackMessageQuery = supabaseAdmin
     .from("artipilot_messages")
     .select(
       "id, workspace_id, owner_user_id, contact_phone, whatsapp_message_id, role, direction, message_type, content, raw_payload, created_at"
     )
-    .eq("workspace_id", workspace.id)
-    .eq("owner_user_id", userId)
-    .order("created_at", { ascending: true });
+    .eq("workspace_id", workspace.id);
+
+  if (!workspaceOnly) {
+    fallbackMessageQuery = fallbackMessageQuery.eq("owner_user_id", userId);
+  }
+
+  const { data: fallbackData, error: fallbackError } =
+    await fallbackMessageQuery.order("created_at", { ascending: true });
 
   if (fallbackError) {
     console.error("Inbox messages fallback error:", fallbackError);
@@ -596,7 +598,9 @@ export async function GET(request: NextRequest) {
     let workspace: WorkspaceRow | null = null;
     let userId = "";
 
-    if (hasPrivateDashboardSession(request)) {
+    const privateCookieSession = hasPrivateSessionFromRequest(request);
+
+    if (privateCookieSession) {
       const privateWorkspace = await getPrivateDashboardWorkspace();
       if (!privateWorkspace?.id) {
         return NextResponse.json(
@@ -618,18 +622,7 @@ export async function GET(request: NextRequest) {
       };
       userId = privateWorkspace.owner_user_id;
     } else {
-      const user = await getUserFromRequest(request);
-
-      if (!user?.id) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
-
-      if (!isAdminEmail(user.email)) {
-        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-      }
-
-      workspace = await getWorkspaceForUser(user.id);
-      userId = user.id;
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     if (!workspace?.id) {
@@ -648,19 +641,23 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    await attachOldRowsToWorkspace({
-      workspace,
-      userId,
-    });
+    if (!privateCookieSession) {
+      await attachOldRowsToWorkspace({
+        workspace,
+        userId,
+      });
+    }
 
     const [contacts, rawMessages] = await Promise.all([
       loadContacts({
         workspace,
         userId,
+        workspaceOnly: privateCookieSession,
       }),
       loadMessages({
         workspace,
         userId,
+        workspaceOnly: privateCookieSession,
       }),
     ]);
 

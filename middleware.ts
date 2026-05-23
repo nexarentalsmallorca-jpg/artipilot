@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  isPrivateSessionCookie,
-  PRIVATE_SESSION_COOKIE,
-} from "@/lib/auth/privateSession";
 
 const PUBLIC_FILE = /\.(.*)$/;
+const SESSION_COOKIE = "artipilot_private_session";
+const SESSION_VALUE = "authenticated";
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -19,6 +17,9 @@ export function middleware(request: NextRequest) {
 
   const isPublicHost =
     hostname === "artipilot.com" || hostname === "www.artipilot.com";
+
+  const isLoggedIn =
+    request.cookies.get(SESSION_COOKIE)?.value === SESSION_VALUE;
 
   const isStaticFile =
     pathname.startsWith("/_next") ||
@@ -35,34 +36,6 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if (isPrivateHost) {
-    const session = request.cookies.get(PRIVATE_SESSION_COOKIE)?.value;
-    const isLoggedIn = isPrivateSessionCookie(session);
-
-    if (pathname === "/") {
-      const url = request.nextUrl.clone();
-      url.pathname = "/login";
-      return NextResponse.redirect(url);
-    }
-
-    if (pathname === "/login" || pathname.startsWith("/logout")) {
-      if (pathname === "/login" && isLoggedIn) {
-        const url = request.nextUrl.clone();
-        url.pathname = "/dashboard/inbox";
-        return NextResponse.redirect(url);
-      }
-      return NextResponse.next();
-    }
-
-    if (pathname.startsWith("/dashboard") && !isLoggedIn) {
-      const url = request.nextUrl.clone();
-      url.pathname = "/login";
-      return NextResponse.redirect(url);
-    }
-
-    return NextResponse.next();
-  }
-
   if (isPublicHost) {
     if (pathname === "/") {
       return NextResponse.next();
@@ -73,7 +46,49 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (pathname.startsWith("/dashboard")) {
+  if (isPrivateHost) {
+    if (pathname === "/") {
+      const url = request.nextUrl.clone();
+      url.pathname = isLoggedIn ? "/dashboard/inbox" : "/login";
+      return NextResponse.redirect(url);
+    }
+
+    if (pathname === "/login") {
+      if (isLoggedIn) {
+        const url = request.nextUrl.clone();
+        url.pathname = "/dashboard/inbox";
+        return NextResponse.redirect(url);
+      }
+
+      return NextResponse.next();
+    }
+
+    if (pathname.startsWith("/logout")) {
+      return NextResponse.next();
+    }
+
+    if (pathname.startsWith("/dashboard")) {
+      if (!isLoggedIn) {
+        const url = request.nextUrl.clone();
+        url.pathname = "/login";
+        return NextResponse.redirect(url);
+      }
+
+      return NextResponse.next();
+    }
+
+    if (pathname.startsWith("/api")) {
+      if (!isLoggedIn) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+
+      return NextResponse.next();
+    }
+
+    return NextResponse.next();
+  }
+
+  if (pathname.startsWith("/dashboard") || pathname.startsWith("/api")) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);

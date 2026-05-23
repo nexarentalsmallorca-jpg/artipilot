@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import {
   PRIVATE_SESSION_COOKIE,
   PRIVATE_SESSION_VALUE,
-} from "@/lib/auth/privateSession";
+} from "@/lib/auth/private-session";
 
 export type LoginState = {
   error?: string;
@@ -22,7 +22,7 @@ export async function loginAction(
     return { error: "Dashboard password is not configured." };
   }
 
-  if (password !== expected) {
+  if (!password || password !== expected) {
     return { error: "Incorrect password." };
   }
 

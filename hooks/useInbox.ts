@@ -102,10 +102,9 @@ export function useInbox() {
   }, [theme, translationTarget, localPinnedMap, localBlockedMap, localMutedMap, localHandledMap]);
 
   const getAuthHeaders = useCallback(async (): Promise<Record<string, string>> => {
-    const { data: { session } } = await supabase.auth.getSession();
-    setUserEmail(session?.user?.email || null);
-    setUserAvatarUrl(session?.user?.user_metadata?.avatar_url || session?.user?.user_metadata?.picture || null);
-    return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+    setUserEmail(null);
+    setUserAvatarUrl(null);
+    return {};
   }, []);
 
   const contactByPhone = useMemo(() => {
@@ -233,7 +232,6 @@ export function useInbox() {
   const loadInbox = useCallback(
     async (silent = false) => {
       try {
-        setLoadError("");
         const authHeaders = await getAuthHeaders();
         const res = await fetch("/api/inbox", {
           cache: "no-store",
@@ -242,9 +240,13 @@ export function useInbox() {
         });
         const data: InboxData = await res.json();
         if (!res.ok) {
-          setLoadError(data?.error || "Failed to load inbox.");
+          setLoadError((previous) => {
+            if (silent && contacts.length > 0) return previous;
+            return data?.error || "Failed to load inbox.";
+          });
           return;
         }
+        setLoadError("");
         const nextContacts = data.contacts || [];
         const nextMessages = data.messages || [];
         setContacts(nextContacts);
@@ -271,7 +273,7 @@ export function useInbox() {
         if (!silent) setLoading(false);
       }
     },
-    [getAuthHeaders]
+    [contacts.length, getAuthHeaders]
   );
 
   useEffect(() => {
