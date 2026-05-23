@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PRIVATE_SESSION_COOKIE } from "@/lib/auth/private-session";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  const response = NextResponse.redirect(new URL("/login", request.url));
+  const response = NextResponse.redirect(new URL("/login", request.url), 303);
 
-  response.cookies.set(PRIVATE_SESSION_COOKIE, "", {
+  response.cookies.set("artipilot_private_session", "", {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: true,
     sameSite: "lax",
     path: "/",
     maxAge: 0,
