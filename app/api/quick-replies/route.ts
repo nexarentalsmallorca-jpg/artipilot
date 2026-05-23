@@ -1,82 +1,94 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getWorkspaceIdForAdmin, requireAdminApiUser } from "@/lib/auth/api";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { DB } from "@/lib/db/tables";
+import { requirePrivateSession } from "@/lib/auth/requirePrivateSession";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  const auth = await requireAdminApiUser(request);
-  if (auth.error) return auth.error;
-
-  const workspaceId = await getWorkspaceIdForAdmin(auth.user.id);
-  if (!workspaceId) return NextResponse.json({ items: [] });
+  const denied = requirePrivateSession(request);
+  if (denied) return denied;
 
   const { data, error } = await supabaseAdmin
-    .from(DB.quickReplies)
+    .from("quick_replies")
     .select("*")
-    .eq("workspace_id", workspaceId)
     .order("created_at", { ascending: false });
 
   if (error) {
-    return NextResponse.json({ items: [], warning: error.message });
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
   return NextResponse.json({ items: data || [] });
 }
 
 export async function POST(request: NextRequest) {
-  const auth = await requireAdminApiUser(request);
-  if (auth.error) return auth.error;
+  const denied = requirePrivateSession(request);
+  if (denied) return denied;
 
-  const workspaceId = await getWorkspaceIdForAdmin(auth.user.id);
-  if (!workspaceId) {
-    return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
-  }
-
-  const body = (await request.json()) as {
-    id?: string;
-    title?: string;
-    message?: string;
-    delete?: boolean;
-  };
-
-  if (body.delete && body.id) {
-    await supabaseAdmin.from(DB.quickReplies).delete().eq("id", body.id).eq("workspace_id", workspaceId);
-    return NextResponse.json({ ok: true });
-  }
-
-  const title = String(body.title || "").trim();
-  const message = String(body.message || "").trim();
-  if (!title || !message) {
-    return NextResponse.json({ error: "Title and message required" }, { status: 400 });
-  }
-
-  if (body.id) {
-    const { data, error } = await supabaseAdmin
-      .from(DB.quickReplies)
-      .update({ title, message, updated_at: new Date().toISOString() })
-      .eq("id", body.id)
-      .eq("workspace_id", workspaceId)
-      .select("*")
-      .single();
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json({ item: data });
-  }
+  const body = await request.json();
 
   const { data, error } = await supabaseAdmin
-    .from(DB.quickReplies)
+    .from("quick_replies")
     .insert({
-      workspace_id: workspaceId,
-      title,
-      message,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      title: String(body.title || "").trim(),
+      content: String(body.content || "").trim(),
+      category: body.category ? String(body.category).trim() : null,
+      active: body.active !== false,
     })
     .select("*")
     .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
   return NextResponse.json({ item: data });
+}
+
+export async function PATCH(request: NextRequest) {
+  const denied = requirePrivateSession(request);
+  if (denied) return denied;
+
+  const body = await request.json();
+  const id = String(body.id || "");
+  if (!id) {
+    return NextResponse.json({ error: "id required" }, { status: 400 });
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("quick_replies")
+    .update({
+      title: body.title !== undefined ? String(body.title).trim() : undefined,
+      content:
+        body.content !== undefined ? String(body.content).trim() : undefined,
+      category:
+        body.category !== undefined ? String(body.category).trim() : undefined,
+      active: body.active !== undefined ? Boolean(body.active) : undefined,
+    })
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ item: data });
+}
+
+export async function DELETE(request: NextRequest) {
+  const denied = requirePrivateSession(request);
+  if (denied) return denied;
+
+  const id = request.nextUrl.searchParams.get("id");
+  if (!id) {
+    return NextResponse.json({ error: "id required" }, { status: 400 });
+  }
+
+  const { error } = await supabaseAdmin.from("quick_replies").delete().eq("id", id);
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true });
 }

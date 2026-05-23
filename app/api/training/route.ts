@@ -1,58 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getWorkspaceIdForAdmin, requireAdminApiUser } from "@/lib/auth/api";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { DB } from "@/lib/db/tables";
+import { requirePrivateSession } from "@/lib/auth/requirePrivateSession";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type KnowledgeRow = {
-  id: string;
-  workspace_id: string;
-  title: string;
-  content: string;
-  category: string | null;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-};
-
-function tableMissing(error: unknown) {
-  const message = String((error as { message?: string })?.message || "").toLowerCase();
-  return message.includes("does not exist") || message.includes("schema cache");
-}
-
 export async function GET(request: NextRequest) {
-  const auth = await requireAdminApiUser(request);
-  if (auth.error) return auth.error;
+  const denied = requirePrivateSession(request);
+  if (denied) return denied;
 
-  const workspaceId = await getWorkspaceIdForAdmin(auth.user.id);
-  if (!workspaceId) {
-    return NextResponse.json({ items: [] });
-  }
-
-  const search = request.nextUrl.searchParams.get("q")?.trim().toLowerCase() || "";
+  const q = request.nextUrl.searchParams.get("q")?.trim().toLowerCase() || "";
 
   const { data, error } = await supabaseAdmin
-    .from(DB.trainingKnowledge)
+    .from("training_knowledge")
     .select("*")
-    .eq("workspace_id", workspaceId)
     .order("updated_at", { ascending: false });
 
   if (error) {
-    if (tableMissing(error)) {
-      return NextResponse.json({ items: [], warning: "training_knowledge table not migrated yet" });
-    }
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  let items = (data || []) as KnowledgeRow[];
-  if (search) {
+  let items = data || [];
+  if (q) {
     items = items.filter(
-      (item) =>
-        item.title.toLowerCase().includes(search) ||
-        item.content.toLowerCase().includes(search) ||
-        String(item.category || "").toLowerCase().includes(search)
+      (row) =>
+        String(row.title).toLowerCase().includes(q) ||
+        String(row.content).toLowerCase().includes(q) ||
+        String(row.category || "").toLowerCase().includes(q)
     );
   }
 
@@ -60,69 +34,22 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = await requireAdminApiUser(request);
-  if (auth.error) return auth.error;
+  const denied = requirePrivateSession(request);
+  if (denied) return denied;
 
-  const workspaceId = await getWorkspaceIdForAdmin(auth.user.id);
-  if (!workspaceId) {
-    return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
-  }
-
-  const body = (await request.json()) as {
-    id?: string;
-    title?: string;
-    content?: string;
-    category?: string;
-    is_active?: boolean;
-    delete?: boolean;
-  };
-
-  if (body.delete && body.id) {
-    const { error } = await supabaseAdmin
-      .from(DB.trainingKnowledge)
-      .delete()
-      .eq("id", body.id)
-      .eq("workspace_id", workspaceId);
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-    return NextResponse.json({ ok: true });
-  }
-
-  const title = String(body.title || "").trim();
-  const content = String(body.content || "").trim();
-  if (!title || !content) {
-    return NextResponse.json({ error: "Title and content are required" }, { status: 400 });
-  }
-
-  const payload = {
-    workspace_id: workspaceId,
-    title,
-    content,
-    category: String(body.category || "General").trim() || "General",
-    is_active: body.is_active !== false,
-    updated_at: new Date().toISOString(),
-  };
-
-  if (body.id) {
-    const { data, error } = await supabaseAdmin
-      .from(DB.trainingKnowledge)
-      .update(payload)
-      .eq("id", body.id)
-      .eq("workspace_id", workspaceId)
-      .select("*")
-      .maybeSingle();
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-    return NextResponse.json({ item: data });
-  }
+  const body = await request.json();
+  const now = new Date().toISOString();
 
   const { data, error } = await supabaseAdmin
-    .from(DB.trainingKnowledge)
-    .insert({ ...payload, created_at: new Date().toISOString() })
+    .from("training_knowledge")
+    .insert({
+      title: String(body.title || "").trim(),
+      category: String(body.category || "General").trim(),
+      content: String(body.content || "").trim(),
+      active: body.active !== false,
+      created_at: now,
+      updated_at: now,
+    })
     .select("*")
     .single();
 
@@ -131,4 +58,57 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ item: data });
+}
+
+export async function PATCH(request: NextRequest) {
+  const denied = requirePrivateSession(request);
+  if (denied) return denied;
+
+  const body = await request.json();
+  const id = String(body.id || "").trim();
+  if (!id) {
+    return NextResponse.json({ error: "id required" }, { status: 400 });
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("training_knowledge")
+    .update({
+      title: body.title !== undefined ? String(body.title).trim() : undefined,
+      category:
+        body.category !== undefined ? String(body.category).trim() : undefined,
+      content:
+        body.content !== undefined ? String(body.content).trim() : undefined,
+      active: body.active !== undefined ? Boolean(body.active) : undefined,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ item: data });
+}
+
+export async function DELETE(request: NextRequest) {
+  const denied = requirePrivateSession(request);
+  if (denied) return denied;
+
+  const id = request.nextUrl.searchParams.get("id");
+  if (!id) {
+    return NextResponse.json({ error: "id required" }, { status: 400 });
+  }
+
+  const { error } = await supabaseAdmin
+    .from("training_knowledge")
+    .delete()
+    .eq("id", id);
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true });
 }
