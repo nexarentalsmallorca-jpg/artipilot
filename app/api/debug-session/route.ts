@@ -7,8 +7,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     hasSession: session === "authenticated",
-    cookieValueExists: Boolean(session),
-    cookieValuePreview: session ? "exists" : "missing",
+    cookieExists: Boolean(session),
     timestamp: new Date().toISOString(),
   });
 }

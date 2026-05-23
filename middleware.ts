@@ -6,7 +6,6 @@ const SESSION_VALUE = "authenticated";
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-
   const host = request.headers.get("host") || "";
   const hostname = host.split(":")[0].toLowerCase();
 
@@ -14,7 +13,6 @@ export function middleware(request: NextRequest) {
     process.env.PRIVATE_DASHBOARD_HOST || "private.artipilot.com";
 
   const isPrivateHost = hostname === privateHost;
-
   const isPublicHost =
     hostname === "artipilot.com" || hostname === "www.artipilot.com";
 
@@ -28,9 +26,7 @@ export function middleware(request: NextRequest) {
     pathname.startsWith("/sitemap.xml") ||
     PUBLIC_FILE.test(pathname);
 
-  if (isStaticFile) {
-    return NextResponse.next();
-  }
+  if (isStaticFile) return NextResponse.next();
 
   if (
     pathname.startsWith("/api/whatsapp/webhook") ||
@@ -40,9 +36,7 @@ export function middleware(request: NextRequest) {
   }
 
   if (isPublicHost) {
-    if (pathname === "/") {
-      return NextResponse.next();
-    }
+    if (pathname === "/") return NextResponse.next();
 
     const url = request.nextUrl.clone();
     url.pathname = "/";
@@ -62,13 +56,10 @@ export function middleware(request: NextRequest) {
         url.pathname = "/dashboard/inbox";
         return NextResponse.redirect(url);
       }
-
       return NextResponse.next();
     }
 
-    if (pathname.startsWith("/logout")) {
-      return NextResponse.next();
-    }
+    if (pathname.startsWith("/logout")) return NextResponse.next();
 
     if (pathname.startsWith("/dashboard")) {
       if (!isLoggedIn) {
@@ -76,7 +67,6 @@ export function middleware(request: NextRequest) {
         url.pathname = "/login";
         return NextResponse.redirect(url);
       }
-
       return NextResponse.next();
     }
 
@@ -84,14 +74,13 @@ export function middleware(request: NextRequest) {
       if (!isLoggedIn) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       }
-
       return NextResponse.next();
     }
 
     return NextResponse.next();
   }
 
-  if (pathname.startsWith("/dashboard") || pathname.startsWith("/api")) {
+  if (pathname.startsWith("/dashboard")) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);
