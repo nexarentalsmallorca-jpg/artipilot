@@ -1,45 +1,54 @@
-/** Relative private-dashboard API fetch (cookie session only). */
-export function fetchPrivateApi(
-  path: string,
-  init: RequestInit & { method?: string } = {}
+export async function fetchPrivateApi(
+  input: string,
+  init: RequestInit = {}
 ): Promise<Response> {
-  if (!path.startsWith("/")) {
-    throw new Error(`Private API path must be relative: ${path}`);
-  }
-  if (/^https?:\/\//i.test(path)) {
-    throw new Error("Private API calls must not use absolute URLs");
-  }
+  const headers = new Headers(init.headers || {});
 
-  const method = (init.method || "GET").toUpperCase();
-
-  return fetch(path, {
+  return fetch(input, {
     ...init,
-    method,
     credentials: "include",
-    cache: method === "GET" ? "no-store" : init.cache,
+    cache: init.cache || "no-store",
+    headers,
   });
 }
 
-export function privateApiErrorLabel(
-  source: string,
-  message?: string | null,
-  status?: number
-): string {
-  const detail =
-    (message && String(message).trim()) ||
-    (status === 401 ? "Unauthorized" : status ? `HTTP ${status}` : "Request failed");
+export async function parsePrivateApiError(
+  label: string,
+  response: Response
+): Promise<string> {
+  try {
+    const data = await response.json();
 
-  const prefix = `${source} error:`;
-  if (detail.toLowerCase().startsWith(prefix.toLowerCase())) {
-    return detail;
+    if (data?.error) {
+      return `${label} error: ${String(data.error)}`;
+    }
+
+    if (data?.message) {
+      return `${label} error: ${String(data.message)}`;
+    }
+  } catch {
+    // ignore JSON parse errors
   }
-  return `${prefix} ${detail}`;
+
+  if (response.status === 401) {
+    return `${label} error: Unauthorized. Please refresh and log in again.`;
+  }
+
+  if (response.status === 403) {
+    return `${label} error: Forbidden. Your private session is not accepted.`;
+  }
+
+  if (response.status === 404) {
+    return `${label} error: API route not found.`;
+  }
+
+  if (response.status >= 500) {
+    return `${label} error: Server error ${response.status}.`;
+  }
+
+  return `${label} error: Request failed with status ${response.status}.`;
 }
 
-export async function parsePrivateApiError(
-  source: string,
-  res: Response
-): Promise<string> {
-  const data = (await res.json().catch(() => ({}))) as { error?: string };
-  return privateApiErrorLabel(source, data.error, res.status);
+export function privateApiErrorLabel(label: string, message: string) {
+  return `${label} error: ${message}`;
 }
