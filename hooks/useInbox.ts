@@ -10,7 +10,6 @@ import {
   useState,
 } from "react";
 import { useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
 import {
   canTranslateMessage,
   cleanPhone,
@@ -100,12 +99,6 @@ export function useInbox() {
     localStorage.setItem("artipilot_inbox_muted_map", JSON.stringify(localMutedMap));
     localStorage.setItem("artipilot_inbox_human_handled_map", JSON.stringify(localHandledMap));
   }, [theme, translationTarget, localPinnedMap, localBlockedMap, localMutedMap, localHandledMap]);
-
-  const getAuthHeaders = useCallback(async (): Promise<Record<string, string>> => {
-    setUserEmail(null);
-    setUserAvatarUrl(null);
-    return {};
-  }, []);
 
   const contactByPhone = useMemo(() => {
     const map = new Map<string, Contact>();
@@ -232,11 +225,10 @@ export function useInbox() {
   const loadInbox = useCallback(
     async (silent = false) => {
       try {
-        const authHeaders = await getAuthHeaders();
         const res = await fetch("/api/inbox", {
-          cache: "no-store",
+          method: "GET",
           credentials: "include",
-          headers: authHeaders,
+          cache: "no-store",
         });
         const data: InboxData = await res.json();
         if (!res.ok) {
@@ -273,7 +265,7 @@ export function useInbox() {
         if (!silent) setLoading(false);
       }
     },
-    [contacts.length, getAuthHeaders]
+    [contacts.length]
   );
 
   useEffect(() => {
@@ -292,11 +284,10 @@ export function useInbox() {
 
   async function updateContactForPhone(phone: string, payload: Record<string, unknown>) {
     try {
-      const authHeaders = await getAuthHeaders();
       const res = await fetch("/api/inbox/contact", {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json", ...authHeaders },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: cleanPhone(phone), ...payload }),
       });
       return res.ok;
@@ -313,11 +304,10 @@ export function useInbox() {
       )
     );
     try {
-      const authHeaders = await getAuthHeaders();
       await fetch("/api/inbox/mark-read", {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json", ...authHeaders },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: cleanPhone(phone) }),
       });
     } catch (error) {
@@ -390,11 +380,10 @@ export function useInbox() {
         )
       );
       setManualReply("");
-      const authHeaders = await getAuthHeaders();
       const res = await fetch("/api/whatsapp/send", {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json", ...authHeaders },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ to: cleanPhone(selectedContact.phone), message: text }),
       });
       const data = await res.json().catch(() => null);
@@ -510,11 +499,10 @@ export function useInbox() {
     const confirmed = window.confirm(`Delete chat with ${displayName(selectedContact)}?`);
     if (!confirmed) return;
     try {
-      const authHeaders = await getAuthHeaders();
       await fetch("/api/inbox/delete-chat", {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json", ...authHeaders },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: cleanPhone(selectedContact.phone) }),
       });
     } catch {
@@ -531,11 +519,10 @@ export function useInbox() {
     if (!selectedContact) return setSendError("Select a chat first.");
     try {
       setLocalNotice("Generating AI suggestion...");
-      const authHeaders = await getAuthHeaders();
       const res = await fetch("/api/inbox/ai-suggestion", {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json", ...authHeaders },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           phone: cleanPhone(selectedContact.phone),
           latestMessage: selectedContact.last_message || "",
@@ -580,11 +567,10 @@ export function useInbox() {
       if (translatingMap[key]) return;
       try {
         setTranslatingMap((previous) => ({ ...previous, [key]: true }));
-        const authHeaders = await getAuthHeaders();
         const res = await fetch("/api/inbox/translate", {
           method: "POST",
           credentials: "include",
-          headers: { "Content-Type": "application/json", ...authHeaders },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             messageId: message.id,
             text: message.content || "",
@@ -608,7 +594,7 @@ export function useInbox() {
         setTranslatingMap((previous) => ({ ...previous, [key]: false }));
       }
     },
-    [getAuthHeaders, translatingMap, translations]
+    [translatingMap, translations]
   );
 
   useEffect(() => {
@@ -626,11 +612,9 @@ export function useInbox() {
       const form = new FormData();
       form.append("file", file);
       form.append("to", cleanPhone(selectedContact.phone));
-      const authHeaders = await getAuthHeaders();
       const res = await fetch("/api/media/upload", {
         method: "POST",
         credentials: "include",
-        headers: authHeaders,
         body: form,
       });
       const data = await res.json().catch(() => null);
@@ -663,11 +647,10 @@ export function useInbox() {
 
   async function deleteMessage(message: Message, mode: "me" | "everyone") {
     try {
-      const authHeaders = await getAuthHeaders();
       const res = await fetch(`/api/messages/${message.id}/delete`, {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json", ...authHeaders },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode }),
       });
       const data = await res.json().catch(() => null);

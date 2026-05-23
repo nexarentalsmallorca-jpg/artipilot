@@ -46,7 +46,11 @@ export default function PrivateInbox() {
   const loadInbox = useCallback(async (contactId?: string | null) => {
     try {
       const q = contactId ? `?contact_id=${encodeURIComponent(contactId)}` : "";
-      const res = await fetch(`/api/inbox${q}`, { credentials: "include" });
+      const res = await fetch(`/api/inbox${q}`, {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+      });
       const data = await res.json();
       if (!res.ok) {
         const msg = [data.error, data.hint].filter(Boolean).join(" — ");

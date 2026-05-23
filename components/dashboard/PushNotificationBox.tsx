@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
 
 type PushNotificationBoxProps = {
   isDark?: boolean;
@@ -64,20 +63,6 @@ export default function PushNotificationBox({
     ? "rounded-full border border-red-400/20 bg-red-500/10 px-4 py-2 text-xs font-black text-red-200 transition hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-50"
     : "rounded-full border border-red-100 bg-red-50 px-4 py-2 text-xs font-black text-red-600 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50";
 
-  const getAuthHeaders = useCallback(async (): Promise<Record<string, string>> => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    const token = session?.access_token;
-
-    if (!token) return {};
-
-    return {
-      Authorization: `Bearer ${token}`,
-    };
-  }, []);
-
   const refreshStatus = useCallback(async () => {
     if (!isBrowserSupported()) {
       setSupported(false);
@@ -128,14 +113,10 @@ export default function PushNotificationBox({
   }
 
   async function saveSubscriptionToServer(subscription: PushSubscription) {
-    const authHeaders = await getAuthHeaders();
-
     const res = await fetch("/api/notifications/subscribe", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...authHeaders,
-      },
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         subscription: subscription.toJSON(),
       }),
@@ -289,14 +270,10 @@ export default function PushNotificationBox({
       setTesting(true);
       setNotice("");
 
-      const authHeaders = await getAuthHeaders();
-
       const res = await fetch("/api/notifications/test", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...authHeaders,
-        },
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
       });
 
       const data = await res.json().catch(() => null);
