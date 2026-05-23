@@ -104,6 +104,10 @@ function InboxPageContent() {
               onDocumentUpload={inbox.handleDocumentUpload}
               onMediaUpload={inbox.handleMediaUpload}
               onVoiceNotice={() => inbox.setLocalNotice("Voice messages can be connected in the media backend step.")}
+              onReplyMessage={inbox.replyToMessage}
+              onCopyMessage={inbox.copyMessage}
+              onDeleteForMe={(message) => void inbox.deleteMessage(message, "me")}
+              onDeleteForEveryone={(message) => void inbox.deleteMessage(message, "everyone")}
             />
           ) : (
             <EmptyChatState />
@@ -156,6 +160,10 @@ function InboxPageContent() {
               onDocumentUpload={inbox.handleDocumentUpload}
               onMediaUpload={inbox.handleMediaUpload}
               onVoiceNotice={() => inbox.setLocalNotice("Voice messages can be connected in the media backend step.")}
+              onReplyMessage={inbox.replyToMessage}
+              onCopyMessage={inbox.copyMessage}
+              onDeleteForMe={(message) => void inbox.deleteMessage(message, "me")}
+              onDeleteForEveryone={(message) => void inbox.deleteMessage(message, "everyone")}
             />
           ) : showListOnMobile ? null : (
             <div className="flex h-full items-center justify-center bg-[#F8F9FA] px-6 text-center text-sm text-[#667781]">

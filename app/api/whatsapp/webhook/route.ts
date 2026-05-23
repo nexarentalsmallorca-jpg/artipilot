@@ -4,6 +4,7 @@ import {
   generateArtipilotReply,
   shouldMarkHumanAttentionFromText,
 } from "@/lib/artipilotAi";
+import { loadActiveTrainingContext } from "@/lib/ai/trainingContext";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { sendCustomerMessagePushNotification } from "@/lib/sendPushNotification";
 
@@ -1517,6 +1518,8 @@ export async function POST(req: NextRequest) {
               phone,
             });
 
+            const trainingKnowledge = await loadActiveTrainingContext(workspace.id);
+
             const aiReply = await generateArtipilotReply({
               businessName: workspace.business_name || "NEXA Rentals",
               businessType:
@@ -1529,6 +1532,7 @@ export async function POST(req: NextRequest) {
               businessRules:
                 workspace.business_rules ||
                 "Be short, friendly and professional. Follow business rules exactly. Never invent prices, availability, licence rules, opening hours, deposits, policies, or final confirmations. If something is unclear, licence-sensitive, complaint-related, damage-related, refund-related, or needs team approval, politely pass the chat to the human team.",
+              trainingKnowledge,
               customerName: savedContact.name || customerName,
               customerPhone: phone,
               customerMessage: content,

@@ -7,15 +7,14 @@ import type { IconName } from "@/lib/inbox/types";
 
 const TABS: { label: string; icon: IconName; href: string; active?: boolean }[] = [
   { label: "Chats", icon: "inbox", href: "/dashboard/inbox", active: true },
-  { label: "Setup", icon: "whatsapp", href: "/dashboard/whatsapp" },
-  { label: "AI", icon: "training", href: "/dashboard/ai-training" },
-  { label: "Home", icon: "home", href: "/dashboard" },
+  { label: "Training", icon: "training", href: "/dashboard/training" },
+  { label: "Replies", icon: "whatsapp", href: "/dashboard/quick-replies" },
   { label: "Settings", icon: "settings", href: "/dashboard/settings" },
 ];
 
 export default function MobileBottomNav() {
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-40 grid h-[calc(64px+env(safe-area-inset-bottom))] grid-cols-5 border-t border-[#E9EDEF] bg-white px-1 pb-[env(safe-area-inset-bottom)] pt-1 md:hidden">
+    <nav className="fixed bottom-0 left-0 right-0 z-40 grid h-[calc(64px+env(safe-area-inset-bottom))] grid-cols-4 border-t border-[#E9EDEF] bg-white px-1 pb-[env(safe-area-inset-bottom)] pt-1 md:hidden">
       {TABS.map((item) => (
         <Link
           key={item.label}

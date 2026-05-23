@@ -14,45 +14,17 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "Artipilot | AI WhatsApp Automation",
+    default: "Artipilot",
     template: "%s | Artipilot",
   },
-  description:
-    "Artipilot helps businesses automate WhatsApp replies, collect leads, manage conversations, and prepare AI customer support workflows.",
-  keywords: [
-    "Artipilot",
-    "WhatsApp automation",
-    "AI WhatsApp assistant",
-    "WhatsApp Business automation",
-    "AI customer support",
-    "lead collection",
-    "business automation",
-  ],
-  authors: [{ name: "Artipilot" }],
-  creator: "Artipilot",
-  publisher: "Artipilot",
+  description: "Artipilot private WhatsApp dashboard.",
   metadataBase: new URL("https://artipilot.com"),
   alternates: {
     canonical: "https://artipilot.com",
   },
-  openGraph: {
-    title: "Artipilot | AI WhatsApp Automation",
-    description:
-      "AI WhatsApp automation software for businesses that want faster replies, better lead collection, and smarter customer conversations.",
-    url: "https://artipilot.com",
-    siteName: "Artipilot",
-    type: "website",
-    locale: "en_US",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "Artipilot | AI WhatsApp Automation",
-    description:
-      "AI WhatsApp automation software for modern businesses.",
-  },
   robots: {
-    index: true,
-    follow: true,
+    index: false,
+    follow: false,
   },
   verification: {
     other: {

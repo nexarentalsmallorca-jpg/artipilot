@@ -15,6 +15,7 @@ export type ArtipilotAiInput = {
   customerPhone: string;
   customerMessage: string;
   recentMessages?: ArtipilotChatMessage[];
+  trainingKnowledge?: string;
 };
 
 type OpenAIResponseContentItem = {
@@ -414,6 +415,9 @@ ${aiJob}
 
 BUSINESS RULES / AI TRAINING BRAIN FROM THE BUSINESS OWNER:
 ${businessRules}
+
+ACTIVE TRAINING KNOWLEDGE (private dashboard):
+${input.trainingKnowledge?.trim() || "No extra training knowledge saved yet."}
 
 RULE PRIORITY:
 1. The AI JOB and BUSINESS RULES above are the highest priority.

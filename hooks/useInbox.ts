@@ -582,18 +582,95 @@ export function useInbox() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPhone, selectedMessages.length, translationTarget]);
 
+  async function uploadMediaFile(file: File) {
+    if (!selectedContact) return;
+    try {
+      setSending(true);
+      setSendError("");
+      const form = new FormData();
+      form.append("file", file);
+      form.append("to", cleanPhone(selectedContact.phone));
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch("/api/media/upload", {
+        method: "POST",
+        headers: authHeaders,
+        body: form,
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setSendError(data?.error || "Media upload failed.");
+        return;
+      }
+      setLocalNotice("Media sent.");
+      await loadInbox(true);
+    } catch {
+      setSendError("Media upload failed.");
+    } finally {
+      setSending(false);
+    }
+  }
+
   function handleDocumentUpload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    setLocalNotice(`Selected document: ${file.name}. Media sending can be connected to your backend next.`);
+    void uploadMediaFile(file);
     event.target.value = "";
   }
 
   function handleMediaUpload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    setLocalNotice(`Selected media: ${file.name}. Media sending can be connected to your backend next.`);
+    void uploadMediaFile(file);
     event.target.value = "";
+  }
+
+  async function deleteMessage(message: Message, mode: "me" | "everyone") {
+    try {
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch(`/api/messages/${message.id}/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders },
+        body: JSON.stringify({ mode }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setSendError(data?.error || "Could not delete message.");
+        return;
+      }
+      if (mode === "everyone" && data?.warning) {
+        setLocalNotice(String(data.warning));
+      }
+      if (mode === "me") {
+        setMessages((previous) => previous.filter((item) => item.id !== message.id));
+      } else {
+        setMessages((previous) =>
+          previous.map((item) =>
+            item.id === message.id
+              ? {
+                  ...item,
+                  deleted_for_everyone: true,
+                  content: "This message was deleted.",
+                }
+              : item
+          )
+        );
+      }
+    } catch {
+      setSendError("Could not delete message.");
+    }
+  }
+
+  function replyToMessage(message: Message) {
+    const snippet = String(message.content || "").trim();
+    if (!snippet) return;
+    setManualReply((previous) => (previous ? `${previous}\n> ${snippet}` : `> ${snippet}`));
+  }
+
+  function copyMessage(message: Message) {
+    const text = String(message.content || "").trim();
+    if (!text) return;
+    void navigator.clipboard.writeText(text);
+    setLocalNotice("Message copied.");
   }
 
   async function markAllAsRead() {
@@ -675,6 +752,9 @@ export function useInbox() {
     translateMessage,
     handleDocumentUpload,
     handleMediaUpload,
+    deleteMessage,
+    replyToMessage,
+    copyMessage,
     markAllAsRead,
   };
 }

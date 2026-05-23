@@ -1,5 +1,5 @@
-import AiTrainingClient from "./AiTrainingClient";
+import { redirect } from "next/navigation";
 
-export default function Page() {
-  return <AiTrainingClient />;
+export default function LegacyAiTrainingPage() {
+  redirect("/dashboard/training");
 }

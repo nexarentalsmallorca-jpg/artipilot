@@ -48,6 +48,10 @@ type ChatPanelProps = {
   onDocumentUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
   onMediaUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
   onVoiceNotice: () => void;
+  onReplyMessage: (message: Message) => void;
+  onCopyMessage: (message: Message) => void;
+  onDeleteForMe: (message: Message) => void;
+  onDeleteForEveryone: (message: Message) => void;
 };
 
 export default function ChatPanel({
@@ -90,6 +94,10 @@ export default function ChatPanel({
   onDocumentUpload,
   onMediaUpload,
   onVoiceNotice,
+  onReplyMessage,
+  onCopyMessage,
+  onDeleteForMe,
+  onDeleteForEveryone,
 }: ChatPanelProps) {
   const human = needsHuman(contact);
   const blocked = isBlocked(contact);
@@ -218,6 +226,10 @@ export default function ChatPanel({
                       translation={translations[key]}
                       isTranslating={translatingMap[key]}
                       onTranslate={() => onTranslate(message)}
+                      onReply={() => onReplyMessage(message)}
+                      onCopy={() => onCopyMessage(message)}
+                      onDeleteForMe={() => onDeleteForMe(message)}
+                      onDeleteForEveryone={() => onDeleteForEveryone(message)}
                     />
                   );
                 })}

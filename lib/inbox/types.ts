@@ -54,6 +54,8 @@ export type Message = {
   translated_text?: string | null;
   translated_language?: string | null;
   status?: "sent" | "delivered" | "read" | null;
+  deleted_for_everyone?: boolean | null;
+  hidden_for_user_ids?: string[] | null;
 };
 
 export type InboxData = {

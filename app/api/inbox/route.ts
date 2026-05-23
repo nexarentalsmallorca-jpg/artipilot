@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isAdminEmail } from "@/lib/auth/config";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
@@ -77,6 +78,8 @@ type MessageRow = {
 
   translated_text?: string | null;
   translated_language?: string | null;
+  deleted_for_everyone?: boolean | null;
+  hidden_for_user_ids?: string[] | null;
 };
 
 type InboxStats = {
@@ -339,11 +342,20 @@ function normalizeMessage(message: MessageRow): MessageRow {
     stringFromUnknown(extras?.link_url) ||
     getFirstLink(message.content || "");
 
+  const deletedForEveryone =
+    message.deleted_for_everyone === true ||
+    extras?.deleted_for_everyone === true;
+
+  const hiddenForUserIds = Array.isArray(message.hidden_for_user_ids)
+    ? message.hidden_for_user_ids
+    : Array.isArray(extras?.hidden_for_user_ids)
+      ? (extras.hidden_for_user_ids as string[])
+      : [];
+
   return {
     ...message,
     contact_phone: normalizePhone(message.contact_phone) || message.contact_phone,
     message_type: message.message_type || "text",
-    content: message.content || "",
     delivery_status: deliveryStatus,
     delivered_at: message.delivered_at || null,
     read_at: message.read_at || null,
@@ -366,7 +378,19 @@ function normalizeMessage(message: MessageRow): MessageRow {
 
     translated_text: message.translated_text || null,
     translated_language: message.translated_language || null,
+    deleted_for_everyone: deletedForEveryone,
+    hidden_for_user_ids: hiddenForUserIds,
+    content: deletedForEveryone
+      ? "This message was deleted."
+      : message.content || "",
   };
+}
+
+function filterMessagesForUser(messages: MessageRow[], userId: string) {
+  return messages.filter((message) => {
+    const hidden = message.hidden_for_user_ids || [];
+    return !hidden.includes(userId);
+  });
 }
 
 function sortContactsForInbox(contacts: ContactRow[]) {
@@ -592,6 +616,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    if (!isAdminEmail(user.email)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const workspace = await getWorkspaceForUser(user.id);
 
     if (!workspace?.id) {
@@ -615,7 +643,7 @@ export async function GET(request: NextRequest) {
       userId: user.id,
     });
 
-    const [contacts, messages] = await Promise.all([
+    const [contacts, rawMessages] = await Promise.all([
       loadContacts({
         workspace,
         userId: user.id,
@@ -625,6 +653,8 @@ export async function GET(request: NextRequest) {
         userId: user.id,
       }),
     ]);
+
+    const messages = filterMessagesForUser(rawMessages, user.id);
 
     return NextResponse.json(
       {

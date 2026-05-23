@@ -3,6 +3,7 @@ import {
   ArtipilotChatMessage,
   generateArtipilotReply,
 } from "@/lib/artipilotAi";
+import { loadActiveTrainingContext } from "@/lib/ai/trainingContext";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
@@ -334,6 +335,7 @@ export async function POST(request: NextRequest) {
       "Customer is waiting for a reply.";
 
     const humanContext = buildHumanContext(contact);
+    const trainingKnowledge = await loadActiveTrainingContext(workspace.id);
 
     const suggestion = await generateArtipilotReply({
       businessName: workspace.business_name || "NEXA Rentals",
@@ -355,6 +357,7 @@ export async function POST(request: NextRequest) {
         ]
           .filter(Boolean)
           .join("\n\n"),
+      trainingKnowledge,
       customerName: contact.name,
       customerPhone: phone,
       customerMessage: latestCustomerMessage,

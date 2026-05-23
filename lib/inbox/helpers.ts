@@ -1,12 +1,10 @@
 import type { Contact, Message } from "./types";
 
 export const NAV_ITEMS = [
-  { label: "Home", href: "/dashboard", icon: "home" as const },
-  { label: "WhatsApp", href: "/dashboard/whatsapp", icon: "whatsapp" as const },
-  { label: "Training", href: "/dashboard/ai-training", icon: "training" as const },
   { label: "Inbox", href: "/dashboard/inbox", icon: "inbox" as const },
+  { label: "Training", href: "/dashboard/training", icon: "training" as const },
+  { label: "Quick replies", href: "/dashboard/quick-replies", icon: "whatsapp" as const },
   { label: "Settings", href: "/dashboard/settings", icon: "settings" as const },
-  { label: "Billing", href: "/dashboard/billing", icon: "billing" as const },
 ];
 
 export const QUICK_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏", "✅", "🔥", "🛵", "📍", "💳", "📄"];

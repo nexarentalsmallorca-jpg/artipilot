@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   canTranslateMessage,
   cx,
@@ -80,13 +81,33 @@ type MessageBubbleProps = {
   translation?: TranslationResult;
   isTranslating?: boolean;
   onTranslate?: () => void;
+  onReply?: () => void;
+  onCopy?: () => void;
+  onDeleteForMe?: () => void;
+  onDeleteForEveryone?: () => void;
 };
 
-export default function MessageBubble({ message, translation, isTranslating, onTranslate }: MessageBubbleProps) {
+export default function MessageBubble({
+  message,
+  translation,
+  isTranslating,
+  onTranslate,
+  onReply,
+  onCopy,
+  onDeleteForMe,
+  onDeleteForEveryone,
+}: MessageBubbleProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
   const outbound = isOutbound(message);
   const owner = getMessageOwner(message);
-  const content = String(message.content || "").trim();
-  const hidePlaceholder = Boolean(message.media_url) && /^\[(Image|Video|Audio message|Document) received\]$/.test(content);
+  const deleted = message.deleted_for_everyone === true;
+  const content = deleted
+    ? "This message was deleted."
+    : String(message.content || "").trim();
+  const hidePlaceholder =
+    !deleted &&
+    Boolean(message.media_url) &&
+    /^\[(Image|Video|Audio message|Document) received\]$/.test(content);
 
   if (message.role === "system") {
     return (
@@ -124,7 +145,48 @@ export default function MessageBubble({ message, translation, isTranslating, onT
             {message.link_url}
           </a>
         ) : null}
-        {content && !hidePlaceholder ? <p className="whitespace-pre-wrap break-words pr-14">{content}</p> : null}
+        {content && !hidePlaceholder ? (
+          <p
+            className={cx(
+              "whitespace-pre-wrap break-words pr-14",
+              deleted && "italic text-[#8696A0]"
+            )}
+          >
+            {content}
+          </p>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => setMenuOpen((open) => !open)}
+          className="absolute right-1 top-1 rounded px-1 text-[#8696A0] opacity-0 transition group-hover:opacity-100"
+          aria-label="Message actions"
+        >
+          ▾
+        </button>
+        {menuOpen ? (
+          <div className="absolute right-0 top-7 z-30 min-w-[180px] overflow-hidden rounded-lg border border-[#E9EDEF] bg-white py-1 text-sm shadow-lg">
+            {onReply ? (
+              <button type="button" className="block w-full px-3 py-2 text-left hover:bg-[#F5F6F6]" onClick={() => { onReply(); setMenuOpen(false); }}>
+                Reply
+              </button>
+            ) : null}
+            {onCopy ? (
+              <button type="button" className="block w-full px-3 py-2 text-left hover:bg-[#F5F6F6]" onClick={() => { onCopy(); setMenuOpen(false); }}>
+                Copy
+              </button>
+            ) : null}
+            {onDeleteForMe ? (
+              <button type="button" className="block w-full px-3 py-2 text-left hover:bg-[#F5F6F6]" onClick={() => { onDeleteForMe(); setMenuOpen(false); }}>
+                Delete for me
+              </button>
+            ) : null}
+            {onDeleteForEveryone && outbound ? (
+              <button type="button" className="block w-full px-3 py-2 text-left text-red-600 hover:bg-[#F5F6F6]" onClick={() => { onDeleteForEveryone(); setMenuOpen(false); }}>
+                Delete for everyone
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {!content && !message.media_url ? <p className="pr-14 italic text-[#8696A0]">Empty message</p> : null}
         {translation?.translatedText ? (
           <div className="mt-2 rounded-lg bg-black/[0.04] px-2.5 py-2 text-[12px] text-[#54656F]">
