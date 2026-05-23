@@ -32,7 +32,10 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if (pathname.startsWith("/api/whatsapp/webhook")) {
+  if (
+    pathname.startsWith("/api/whatsapp/webhook") ||
+    pathname.startsWith("/api/auth/private-login")
+  ) {
     return NextResponse.next();
   }
 

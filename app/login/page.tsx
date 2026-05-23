@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import LoginForm from "./LoginForm";
 
 export default function LoginPage() {
@@ -8,8 +9,10 @@ export default function LoginPage() {
         <h1 className="mt-3 text-3xl font-bold tracking-tight">
           Artipilot Private Dashboard
         </h1>
-        <p className="mt-3 text-slate-400">Secure access only</p>
-        <LoginForm />
+        <p className="mt-3 text-slate-400">Secure access only.</p>
+        <Suspense fallback={<div className="mt-8 h-32" />}>
+          <LoginForm />
+        </Suspense>
       </div>
     </main>
   );
