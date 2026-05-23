@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  PRIVATE_SESSION_COOKIE,
-  PRIVATE_SESSION_VALUE,
-} from "@/lib/auth/private-session";
-
 const PUBLIC_FILE = /\.(.*)$/;
+const PRIVATE_SESSION_COOKIE = "artipilot_private_session";
+const PRIVATE_SESSION_VALUE = "authenticated";
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;

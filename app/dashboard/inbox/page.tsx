@@ -1,5 +1,5 @@
-import InboxClient from "./inbox-client";
+import PrivateFullInbox from "@/components/dashboard/PrivateFullInbox";
 
 export default function InboxPage() {
-  return <InboxClient />;
+  return <PrivateFullInbox />;
 }
