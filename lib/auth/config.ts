@@ -1,8 +1,11 @@
-export const PUBLIC_HOSTS = new Set(["artipilot.com", "www.artipilot.com"]);
+import {
+  getPrivateDashboardHost,
+  isPrivateHostname,
+  isPublicHostname,
+  isVercelPreviewHostname,
+} from "@/lib/auth/host";
 
-export const PRIVATE_HOST = "private.artipilot.com";
-
-const LOCAL_PRIVATE_HOSTS = new Set(["localhost", "127.0.0.1"]);
+export { getPrivateDashboardHost, isPrivateHostname, isPublicHostname };
 
 export function normalizeHost(hostHeader: string | null): string {
   const raw = (hostHeader || "").split(",")[0]?.trim().toLowerCase() || "";
@@ -10,21 +13,18 @@ export function normalizeHost(hostHeader: string | null): string {
 }
 
 export function isPublicHost(host: string): boolean {
-  return PUBLIC_HOSTS.has(host);
+  return isPublicHostname(host);
 }
 
 export function isPrivateHost(host: string): boolean {
-  if (host === PRIVATE_HOST) return true;
-  if (process.env.ALLOW_LOCAL_PRIVATE === "true" && LOCAL_PRIVATE_HOSTS.has(host)) {
-    return true;
-  }
-  return false;
+  return isPrivateHostname(host);
 }
 
 export function isVercelPreviewHost(host: string): boolean {
-  return host.endsWith(".vercel.app");
+  return isVercelPreviewHostname(host);
 }
 
+/** Private + preview hosts use dashboard auth rules in middleware. */
 export function isDashboardHost(host: string): boolean {
   return isPrivateHost(host) || isVercelPreviewHost(host);
 }
@@ -51,7 +51,6 @@ export function getExtraPassword(): string | null {
 export const PUBLIC_ONLY_PATHS = new Set(["/"]);
 
 export const PRIVATE_PUBLIC_PATHS = new Set([
-  "/",
   "/login",
   "/access-denied",
   "/auth/callback",
@@ -61,6 +60,8 @@ export const BLOCKED_ON_PUBLIC_PATH_PREFIXES = [
   "/dashboard",
   "/signup",
   "/setup",
+  "/login",
+  "/access-denied",
   "/api/inbox",
   "/api/ai-training",
   "/api/workspace",
