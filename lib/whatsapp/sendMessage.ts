@@ -65,6 +65,49 @@ async function sendViaLegacyTables(contactId: string, text: string) {
   return { ok: send.ok, message, error: send.error || null };
 }
 
+export async function sendByPhone(to: string, text: string) {
+  const workspaceId = await getWorkspaceId();
+  if (!workspaceId) {
+    throw new Error("No workspace configured (set ARTIPILOT_WORKSPACE_ID)");
+  }
+
+  const phone = normalizePhone(to);
+  const { data: contact } = await supabaseAdmin
+    .from("artipilot_contacts")
+    .select("*")
+    .eq("workspace_id", workspaceId)
+    .eq("phone", phone)
+    .maybeSingle();
+
+  if (contact?.id) {
+    return sendViaLegacyTables(String(contact.id), text);
+  }
+
+  const send = await sendWhatsAppText(phone, text);
+  const now = new Date().toISOString();
+
+  const { data: message, error } = await supabaseAdmin
+    .from("artipilot_messages")
+    .insert({
+      workspace_id: workspaceId,
+      contact_phone: phone,
+      whatsapp_message_id: send.whatsappMessageId,
+      role: "manual",
+      direction: "outbound",
+      message_type: "text",
+      content: text,
+      raw_payload: send.raw,
+      created_at: now,
+      delivery_status: send.ok ? "sent" : "failed",
+    })
+    .select("*")
+    .single();
+
+  if (error) throw new Error(error.message);
+
+  return { ok: send.ok, message, error: send.error || null };
+}
+
 export async function sendDashboardMessage(contactId: string, text: string) {
   const schemaReady = await isPrivateSchemaReady();
 

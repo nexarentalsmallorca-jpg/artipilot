@@ -55,7 +55,7 @@ Tone: ${settings.tone || "Friendly and professional"}
 Main job: ${settings.main_job || ""}
 Business rules: ${settings.business_rules || ""}
 Handoff rules: ${settings.handoff_rules || ""}
-Language: ${settings.language_rule || "Reply in the customer's language."}
+Language: ${settings.language_rule || "Always reply in the same language the customer used in their latest message. If they write in Spanish, reply in Spanish. If they write in English, reply in English. Never switch languages unless the customer does."}
 Booking link: ${settings.booking_link || "(none)"}
 
 Active training knowledge:

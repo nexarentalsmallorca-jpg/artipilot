@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireInboxApiAccess } from "@/lib/inbox/inboxRouteAuth";
 import {
   ArtipilotChatMessage,
   generateArtipilotReply,
@@ -270,26 +271,19 @@ function buildHumanContext(contact: ContactRow) {
 
 export async function POST(request: NextRequest) {
   try {
-    const user = await getUserFromRequest(request);
+    const auth = await requireInboxApiAccess(request);
+    if (!auth.ok) return auth.response;
 
-    if (!user?.id) {
-      return NextResponse.json(
-        {
-          error: "Not authenticated",
-        },
-        { status: 401 }
-      );
-    }
+    const { userId, workspace: workspaceRow } = auth.ctx;
 
-    const workspace = await getWorkspaceForUser(user.id);
+    const { data: workspace } = await supabaseAdmin
+      .from("artipilot_workspaces")
+      .select("*")
+      .eq("id", workspaceRow.id)
+      .maybeSingle();
 
     if (!workspace?.id) {
-      return NextResponse.json(
-        {
-          error: "Workspace not found",
-        },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
     }
 
     const body = await request.json();
@@ -307,7 +301,7 @@ export async function POST(request: NextRequest) {
 
     const contact = await getContact({
       workspace,
-      userId: user.id,
+      userId,
       phone,
     });
 
@@ -322,7 +316,7 @@ export async function POST(request: NextRequest) {
 
     const recentMessages = await getRecentMessages({
       workspace,
-      userId: user.id,
+      userId,
       phone,
     });
 

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requirePrivateSession } from "@/lib/auth/requirePrivateSession";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -93,6 +94,9 @@ function safeJsonParse(value: string): DetectResult | null {
 }
 
 export async function POST(request: NextRequest) {
+  const denied = requirePrivateSession(request);
+  if (denied) return denied;
+
   try {
     const body = (await request.json()) as TranslateRequestBody;
 

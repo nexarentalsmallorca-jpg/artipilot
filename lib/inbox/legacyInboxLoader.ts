@@ -1,5 +1,10 @@
 ﻿import { NextRequest, NextResponse } from "next/server";
 import { isAdminEmail } from "@/lib/auth/config";
+import {
+  getPrivateDashboardWorkspace,
+  getUserFromBearer,
+  hasPrivateDashboardSession,
+} from "@/lib/auth/dashboardAccess";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
@@ -177,24 +182,7 @@ function numberFromUnknown(value: unknown) {
 }
 
 async function getUserFromRequest(request: NextRequest) {
-  const authHeader = request.headers.get("authorization");
-  const token = authHeader?.replace("Bearer ", "").trim();
-
-  if (!token) {
-    return null;
-  }
-
-  const {
-    data: { user },
-    error,
-  } = await supabaseAdmin.auth.getUser(token);
-
-  if (error || !user) {
-    console.error("Inbox auth error:", error);
-    return null;
-  }
-
-  return user;
+  return getUserFromBearer(request);
 }
 
 async function getWorkspaceForUser(userId: string) {
@@ -605,22 +593,44 @@ function buildStats(contacts: ContactRow[], messages: MessageRow[]): InboxStats 
 
 export async function GET(request: NextRequest) {
   try {
-    const user = await getUserFromRequest(request);
+    let workspace: WorkspaceRow | null = null;
+    let userId = "";
 
-    if (!user?.id) {
-      return NextResponse.json(
-        {
-          error: "Not authenticated",
-        },
-        { status: 401 }
-      );
+    if (hasPrivateDashboardSession(request)) {
+      const privateWorkspace = await getPrivateDashboardWorkspace();
+      if (!privateWorkspace?.id) {
+        return NextResponse.json(
+          {
+            contacts: [],
+            messages: [],
+            stats: getEmptyStats(),
+            error: "No workspace found. Set ARTIPILOT_WORKSPACE_ID in Vercel.",
+          },
+          {
+            status: 200,
+            headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
+          }
+        );
+      }
+      workspace = {
+        id: privateWorkspace.id,
+        owner_user_id: privateWorkspace.owner_user_id,
+      };
+      userId = privateWorkspace.owner_user_id;
+    } else {
+      const user = await getUserFromRequest(request);
+
+      if (!user?.id) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+
+      if (!isAdminEmail(user.email)) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+
+      workspace = await getWorkspaceForUser(user.id);
+      userId = user.id;
     }
-
-    if (!isAdminEmail(user.email)) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-
-    const workspace = await getWorkspaceForUser(user.id);
 
     if (!workspace?.id) {
       return NextResponse.json(
@@ -640,21 +650,21 @@ export async function GET(request: NextRequest) {
 
     await attachOldRowsToWorkspace({
       workspace,
-      userId: user.id,
+      userId,
     });
 
     const [contacts, rawMessages] = await Promise.all([
       loadContacts({
         workspace,
-        userId: user.id,
+        userId,
       }),
       loadMessages({
         workspace,
-        userId: user.id,
+        userId,
       }),
     ]);
 
-    const messages = filterMessagesForUser(rawMessages, user.id);
+    const messages = filterMessagesForUser(rawMessages, userId);
 
     return NextResponse.json(
       {

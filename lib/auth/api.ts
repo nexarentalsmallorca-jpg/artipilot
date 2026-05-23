@@ -1,21 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import {
+  getPrivateDashboardWorkspace,
+  getUserFromBearer,
+  hasPrivateDashboardSession,
+  PRIVATE_DASHBOARD_ACTOR_ID,
+} from "@/lib/auth/dashboardAccess";
 import { isAdminEmail } from "@/lib/auth/config";
 import type { User } from "@supabase/supabase-js";
 
-export async function getUserFromBearer(request: NextRequest): Promise<User | null> {
-  const authHeader = request.headers.get("authorization");
-  const token = authHeader?.replace(/^Bearer\s+/i, "").trim();
-  if (!token) return null;
-
-  const {
-    data: { user },
-    error,
-  } = await supabaseAdmin.auth.getUser(token);
-
-  if (error || !user) return null;
-  return user;
-}
+export { getUserFromBearer };
 
 export function unauthorizedResponse(message = "Unauthorized") {
   return NextResponse.json({ error: message }, { status: 401 });
@@ -29,6 +23,27 @@ export async function requireAdminApiUser(request: NextRequest): Promise<
   | { user: User; error: null }
   | { user: null; error: NextResponse }
 > {
+  if (hasPrivateDashboardSession(request)) {
+    const workspace = await getPrivateDashboardWorkspace();
+    if (!workspace) {
+      return {
+        user: null,
+        error: NextResponse.json(
+          { error: "No workspace configured for private dashboard" },
+          { status: 503 }
+        ),
+      };
+    }
+
+    return {
+      user: {
+        id: workspace.owner_user_id || PRIVATE_DASHBOARD_ACTOR_ID,
+        email: process.env.PRIVATE_DASHBOARD_ADMIN_EMAIL || "private@artipilot.local",
+      } as User,
+      error: null,
+    };
+  }
+
   const user = await getUserFromBearer(request);
   if (!user) {
     return { user: null, error: unauthorizedResponse() };
@@ -39,7 +54,15 @@ export async function requireAdminApiUser(request: NextRequest): Promise<
   return { user, error: null };
 }
 
-export async function getWorkspaceIdForAdmin(userId: string): Promise<string | null> {
+export async function getWorkspaceIdForAdmin(
+  userId: string,
+  request?: NextRequest
+): Promise<string | null> {
+  if (request && hasPrivateDashboardSession(request)) {
+    const workspace = await getPrivateDashboardWorkspace();
+    return workspace?.id || null;
+  }
+
   const forced = process.env.ARTIPILOT_WORKSPACE_ID?.trim();
   if (forced) return forced;
 

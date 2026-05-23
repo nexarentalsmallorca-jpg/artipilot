@@ -51,6 +51,7 @@ export function useInbox() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [localNotice, setLocalNotice] = useState("");
   const [translationTarget, setTranslationTarget] = useState("English");
+  const translationTargetRef = useRef("English");
   const [translations, setTranslations] = useState<Record<string, TranslationResult>>({});
   const [translatingMap, setTranslatingMap] = useState<Record<string, boolean>>({});
   const [localPinnedMap, setLocalPinnedMap] = useState<Record<string, boolean>>({});
@@ -76,7 +77,10 @@ export function useInbox() {
     const savedHandled = localStorage.getItem("artipilot_inbox_human_handled_map");
     const savedTarget = localStorage.getItem("artipilot_translation_target");
     if (savedTheme === "dark" || savedTheme === "light") setTheme(savedTheme);
-    if (savedTarget) setTranslationTarget(savedTarget);
+    if (savedTarget) {
+      setTranslationTarget(savedTarget);
+      translationTargetRef.current = savedTarget;
+    }
     try {
       if (savedPinned) setLocalPinnedMap(JSON.parse(savedPinned));
       if (savedBlocked) setLocalBlockedMap(JSON.parse(savedBlocked));
@@ -88,6 +92,7 @@ export function useInbox() {
   }, []);
 
   useEffect(() => {
+    translationTargetRef.current = translationTarget;
     localStorage.setItem("artipilot_theme", theme);
     localStorage.setItem("artipilot_translation_target", translationTarget);
     localStorage.setItem("artipilot_inbox_pinned_map", JSON.stringify(localPinnedMap));
@@ -230,7 +235,11 @@ export function useInbox() {
       try {
         setLoadError("");
         const authHeaders = await getAuthHeaders();
-        const res = await fetch("/api/inbox", { cache: "no-store", headers: authHeaders });
+        const res = await fetch("/api/inbox", {
+          cache: "no-store",
+          credentials: "include",
+          headers: authHeaders,
+        });
         const data: InboxData = await res.json();
         if (!res.ok) {
           setLoadError(data?.error || "Failed to load inbox.");
@@ -284,6 +293,7 @@ export function useInbox() {
       const authHeaders = await getAuthHeaders();
       const res = await fetch("/api/inbox/contact", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({ phone: cleanPhone(phone), ...payload }),
       });
@@ -304,6 +314,7 @@ export function useInbox() {
       const authHeaders = await getAuthHeaders();
       await fetch("/api/inbox/mark-read", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({ phone: cleanPhone(phone) }),
       });
@@ -380,6 +391,7 @@ export function useInbox() {
       const authHeaders = await getAuthHeaders();
       const res = await fetch("/api/whatsapp/send", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({ to: cleanPhone(selectedContact.phone), message: text }),
       });
@@ -499,6 +511,7 @@ export function useInbox() {
       const authHeaders = await getAuthHeaders();
       await fetch("/api/inbox/delete-chat", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({ phone: cleanPhone(selectedContact.phone) }),
       });
@@ -519,6 +532,7 @@ export function useInbox() {
       const authHeaders = await getAuthHeaders();
       const res = await fetch("/api/inbox/ai-suggestion", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({
           phone: cleanPhone(selectedContact.phone),
@@ -540,7 +554,26 @@ export function useInbox() {
   const translateMessage = useCallback(
     async (message: Message, force = false) => {
       if (!canTranslateMessage(message)) return;
-      const key = `${message.id}:${translationTarget}`;
+      const target = translationTargetRef.current || "English";
+      const key = `${message.id}:${target}`;
+
+      if (
+        !force &&
+        message.translated_text &&
+        (!message.translated_language ||
+          message.translated_language.toLowerCase().includes(target.toLowerCase().slice(0, 3)))
+      ) {
+        setTranslations((previous) => ({
+          ...previous,
+          [key]: {
+            translatedText: String(message.translated_text),
+            detectedLanguage: String(message.translated_language || "Unknown"),
+            targetLanguage: target,
+          },
+        }));
+        return;
+      }
+
       if (!force && translations[key]) return;
       if (translatingMap[key]) return;
       try {
@@ -548,11 +581,12 @@ export function useInbox() {
         const authHeaders = await getAuthHeaders();
         const res = await fetch("/api/inbox/translate", {
           method: "POST",
+          credentials: "include",
           headers: { "Content-Type": "application/json", ...authHeaders },
           body: JSON.stringify({
             messageId: message.id,
             text: message.content || "",
-            targetLanguage: translationTarget,
+            targetLanguage: target,
           }),
         });
         const data = await res.json().catch(() => null);
@@ -562,7 +596,7 @@ export function useInbox() {
             [key]: {
               translatedText: String(data.translatedText),
               detectedLanguage: String(data.detectedLanguage || "Unknown"),
-              targetLanguage: String(data.targetLanguage || translationTarget),
+              targetLanguage: String(data.targetLanguage || target),
             },
           }));
         }
@@ -572,7 +606,7 @@ export function useInbox() {
         setTranslatingMap((previous) => ({ ...previous, [key]: false }));
       }
     },
-    [getAuthHeaders, translationTarget, translatingMap, translations]
+    [getAuthHeaders, translatingMap, translations]
   );
 
   useEffect(() => {
@@ -593,6 +627,7 @@ export function useInbox() {
       const authHeaders = await getAuthHeaders();
       const res = await fetch("/api/media/upload", {
         method: "POST",
+        credentials: "include",
         headers: authHeaders,
         body: form,
       });
@@ -629,6 +664,7 @@ export function useInbox() {
       const authHeaders = await getAuthHeaders();
       const res = await fetch(`/api/messages/${message.id}/delete`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({ mode }),
       });

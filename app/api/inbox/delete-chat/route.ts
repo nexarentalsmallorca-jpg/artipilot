@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireInboxApiAccess } from "@/lib/inbox/inboxRouteAuth";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
@@ -53,27 +54,10 @@ function normalizePhone(phone: string) {
 
 export async function POST(request: NextRequest) {
   try {
-    const user = await getUserFromRequest(request);
+    const auth = await requireInboxApiAccess(request);
+    if (!auth.ok) return auth.response;
 
-    if (!user?.id) {
-      return NextResponse.json(
-        {
-          error: "Not authenticated",
-        },
-        { status: 401 }
-      );
-    }
-
-    const workspace = await getWorkspaceForUser(user.id);
-
-    if (!workspace?.id) {
-      return NextResponse.json(
-        {
-          error: "Workspace not found",
-        },
-        { status: 404 }
-      );
-    }
+    const { userId, workspace } = auth.ctx;
 
     const body = await request.json();
     const phone = normalizePhone(String(body?.phone || ""));
@@ -91,7 +75,7 @@ export async function POST(request: NextRequest) {
       .from("artipilot_messages")
       .delete()
       .eq("workspace_id", workspace.id)
-      .eq("owner_user_id", user.id)
+      .eq("owner_user_id", userId)
       .eq("contact_phone", phone);
 
     if (messagesError) {
@@ -109,7 +93,7 @@ export async function POST(request: NextRequest) {
       .from("artipilot_contacts")
       .delete()
       .eq("workspace_id", workspace.id)
-      .eq("owner_user_id", user.id)
+      .eq("owner_user_id", userId)
       .eq("phone", phone);
 
     if (contactError) {

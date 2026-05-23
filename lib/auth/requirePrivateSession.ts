@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { hasPrivateDashboardSession } from "@/lib/auth/dashboardAccess";
 import {
   isPrivateSessionCookie,
   PRIVATE_SESSION_COOKIE,
 } from "@/lib/auth/privateSession";
 
 export function isPrivateSessionValid(request: NextRequest): boolean {
-  const value = request.cookies.get(PRIVATE_SESSION_COOKIE)?.value;
-  return isPrivateSessionCookie(value);
+  return hasPrivateDashboardSession(request);
 }
 
 export function requirePrivateSession(

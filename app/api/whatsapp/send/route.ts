@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requirePrivateSession } from "@/lib/auth/requirePrivateSession";
-import { sendDashboardMessage } from "@/lib/whatsapp/sendMessage";
+import {
+  sendByPhone,
+  sendDashboardMessage,
+} from "@/lib/whatsapp/sendMessage";
+import { normalizePhone } from "@/lib/whatsapp";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,16 +16,30 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as {
       contact_id?: string;
+      to?: string;
       body?: string;
       message?: string;
     };
 
     const contactId = String(body.contact_id || "").trim();
+    const to = normalizePhone(String(body.to || ""));
     const text = String(body.body || body.message || "").trim();
 
-    if (!contactId || !text) {
+    if (!text) {
       return NextResponse.json(
-        { error: "contact_id and body are required" },
+        { error: "Message body is required" },
+        { status: 400 }
+      );
+    }
+
+    if (to) {
+      const result = await sendByPhone(to, text);
+      return NextResponse.json(result);
+    }
+
+    if (!contactId) {
+      return NextResponse.json(
+        { error: "Provide contact_id or to (phone number)" },
         { status: 400 }
       );
     }

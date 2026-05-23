@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
   const auth = await requireAdminApiUser(request);
   if (auth.error) return auth.error;
 
-  const workspaceId = await getWorkspaceIdForAdmin(auth.user.id);
+  const workspaceId = await getWorkspaceIdForAdmin(auth.user.id, request);
   if (!workspaceId) {
     return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
   }

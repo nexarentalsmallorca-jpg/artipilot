@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireInboxApiAccess } from "@/lib/inbox/inboxRouteAuth";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
@@ -74,16 +75,19 @@ async function markContactRead({
   userId: string;
   phone: string;
 }) {
-  const { data, error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from("artipilot_contacts")
     .update({
       unread_count: 0,
     })
     .eq("workspace_id", workspace.id)
-    .eq("owner_user_id", userId)
-    .eq("phone", phone)
-    .select("*")
-    .maybeSingle();
+    .eq("phone", phone);
+
+  if (userId && userId !== "private-dashboard-session") {
+    query = query.eq("owner_user_id", userId);
+  }
+
+  const { data, error } = await query.select("*").maybeSingle();
 
   if (error) {
     return {
@@ -109,7 +113,7 @@ async function markInboundMessagesRead({
 }) {
   const now = new Date().toISOString();
 
-  const { error } = await supabaseAdmin
+  let messageQuery = supabaseAdmin
     .from("artipilot_messages")
     .update({
       delivery_status: "read",
@@ -117,9 +121,14 @@ async function markInboundMessagesRead({
       delivery_updated_at: now,
     })
     .eq("workspace_id", workspace.id)
-    .eq("owner_user_id", userId)
     .eq("contact_phone", phone)
     .eq("direction", "inbound");
+
+  if (userId && userId !== "private-dashboard-session") {
+    messageQuery = messageQuery.eq("owner_user_id", userId);
+  }
+
+  const { error } = await messageQuery;
 
   if (!error) {
     return;
@@ -138,27 +147,10 @@ async function markInboundMessagesRead({
 
 export async function POST(request: NextRequest) {
   try {
-    const user = await getUserFromRequest(request);
+    const auth = await requireInboxApiAccess(request);
+    if (!auth.ok) return auth.response;
 
-    if (!user?.id) {
-      return NextResponse.json(
-        {
-          error: "Not authenticated",
-        },
-        { status: 401 }
-      );
-    }
-
-    const workspace = await getWorkspaceForUser(user.id);
-
-    if (!workspace?.id) {
-      return NextResponse.json(
-        {
-          error: "Workspace not found",
-        },
-        { status: 404 }
-      );
-    }
+    const { userId, workspace } = auth.ctx;
 
     const body = await request.json();
     const phone = normalizePhone(String(body?.phone || ""));
@@ -174,7 +166,7 @@ export async function POST(request: NextRequest) {
 
     const { contact, error } = await markContactRead({
       workspace,
-      userId: user.id,
+      userId,
       phone,
     });
 
@@ -200,7 +192,7 @@ export async function POST(request: NextRequest) {
 
     await markInboundMessagesRead({
       workspace,
-      userId: user.id,
+      userId,
       phone,
     });
 
