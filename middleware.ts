@@ -69,6 +69,9 @@ export function middleware(request: NextRequest) {
     if (pathname.startsWith("/api/debug-host")) {
       return NextResponse.next();
     }
+    if (pathname.startsWith("/api/debug-set-session")) {
+  return NextResponse.next();
+}
 
     if (pathname.startsWith("/dashboard")) {
       if (!isLoggedIn) {
