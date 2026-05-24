@@ -27,7 +27,15 @@ function cleanString(value: unknown) {
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+
+  return fallback;
 }
 
 export async function fetchContactsAction(): Promise<{
@@ -134,15 +142,21 @@ export async function sendMessageAction(
     if (!isWhatsAppConfigured()) {
       return {
         error:
-          "WhatsApp sender is not configured. Check your Vercel environment variables.",
+          "WhatsApp sender is not configured. Check WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID in Vercel.",
       };
     }
 
     const contact = await getContactById(cleanContactId);
 
-    if (!contact?.id || !contact.phone) {
+    if (!contact?.id) {
       return {
-        error: "Contact was not found or phone number is missing.",
+        error: "Contact was not found.",
+      };
+    }
+
+    if (!contact.phone) {
+      return {
+        error: "This contact has no phone number saved.",
       };
     }
 
@@ -162,14 +176,18 @@ export async function sendMessageAction(
       whatsapp_message_id: sendResult.ok ? sendResult.messageId : null,
     });
 
-    await touchContactLastMessage(contact.id, text);
-
     if (!sendResult.ok) {
+      console.error("WhatsApp send failed:", sendResult);
+
       return {
         message: savedMessage,
-        error: sendResult.error || "WhatsApp message failed to send.",
+        error:
+          sendResult.error ||
+          "WhatsApp failed to send this message. Check Meta token, phone number ID, and 24-hour reply window.",
       };
     }
+
+    await touchContactLastMessage(contact.id, text);
 
     return {
       message: savedMessage,
