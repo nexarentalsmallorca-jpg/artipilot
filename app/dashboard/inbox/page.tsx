@@ -1,15 +1,21 @@
-import { redirect } from "next/navigation";
-import { hasPrivateSessionServer } from "@/lib/auth/server-session";
+import { listContacts, type ApiContact } from "@/lib/db/private-inbox";
+import { isSupabaseConfigured } from "@/lib/supabase/admin";
+import InboxClient from "./InboxClient";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function DashboardPage() {
-  const hasSession = await hasPrivateSessionServer();
+export default async function InboxPage() {
+  let initialContacts: ApiContact[] = [];
 
-  if (!hasSession) {
-    redirect("/login");
+  if (isSupabaseConfigured()) {
+    try {
+      initialContacts = await listContacts();
+    } catch (error) {
+      console.error("InboxPage failed to load initial contacts:", error);
+      initialContacts = [];
+    }
   }
 
-  redirect("/dashboard/inbox");
+  return <InboxClient initialContacts={initialContacts} />;
 }

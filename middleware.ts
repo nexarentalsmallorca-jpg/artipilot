@@ -65,7 +65,6 @@ export function middleware(request: NextRequest) {
   );
 
   const allowLocalPrivate = process.env.ALLOW_LOCAL_PRIVATE === "true";
-
   const isLocalHost = LOCAL_HOSTS.includes(hostname);
 
   const isPrivateHost =
@@ -97,7 +96,10 @@ export function middleware(request: NextRequest) {
       }
 
       if (!isLoggedIn) {
-        return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+        return NextResponse.json(
+          { error: "Not authenticated." },
+          { status: 401 }
+        );
       }
 
       return NextResponse.next();
@@ -111,11 +113,12 @@ export function middleware(request: NextRequest) {
       return redirectTo(request, isLoggedIn ? "/dashboard/inbox" : "/login");
     }
 
+    /*
+      IMPORTANT:
+      Do NOT redirect /login to /dashboard here.
+      This prevents login <-> dashboard redirect loops.
+    */
     if (pathname === "/login") {
-      if (isLoggedIn) {
-        return redirectTo(request, "/dashboard/inbox");
-      }
-
       return NextResponse.next();
     }
 
