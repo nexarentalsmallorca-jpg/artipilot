@@ -35,7 +35,11 @@ function getErrorMessage(error: unknown, fallback: string) {
     return error;
   }
 
-  return fallback;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return fallback;
+  }
 }
 
 export async function fetchContactsAction(): Promise<{
@@ -160,34 +164,48 @@ export async function sendMessageAction(
       };
     }
 
-    const pendingMessage = await insertOutboundMessage({
-      contactId: contact.id,
-      phone: contact.phone,
-      body: text,
-      senderType: "admin",
-      status: "pending",
-    });
-
     const sendResult = await sendWhatsAppText(contact.phone, text);
-
-    const savedMessage = await updateOutboundMessage(pendingMessage.id, {
-      status: sendResult.ok ? "sent" : "failed",
-      status_error: sendResult.ok ? null : sendResult.error,
-      whatsapp_message_id: sendResult.ok ? sendResult.messageId : null,
-    });
 
     if (!sendResult.ok) {
       console.error("WhatsApp send failed:", sendResult);
 
       return {
-        message: savedMessage,
         error:
           sendResult.error ||
           "WhatsApp failed to send this message. Check Meta token, phone number ID, and 24-hour reply window.",
       };
     }
 
-    await touchContactLastMessage(contact.id, text);
+    let savedMessage: ApiMessage | undefined;
+
+    try {
+      savedMessage = await insertOutboundMessage({
+        contactId: contact.id,
+        phone: contact.phone,
+        body: text,
+        senderType: "admin",
+        status: "sent",
+        whatsappMessageId: sendResult.messageId || null,
+      });
+
+      if (savedMessage?.id) {
+        savedMessage = await updateOutboundMessage(savedMessage.id, {
+          status: "sent",
+          status_error: null,
+          whatsapp_message_id: sendResult.messageId || null,
+        });
+      }
+
+      await touchContactLastMessage(contact.id, text);
+    } catch (databaseError) {
+      console.error("WhatsApp sent but database save failed:", databaseError);
+
+      return {
+        error:
+          "WhatsApp message was sent, but Supabase failed to save it: " +
+          getErrorMessage(databaseError, "Unknown database error."),
+      };
+    }
 
     return {
       message: savedMessage,
