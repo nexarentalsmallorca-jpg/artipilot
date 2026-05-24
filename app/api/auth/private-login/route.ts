@@ -1,3 +1,4 @@
+import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -14,8 +15,8 @@ function redirectToLogin(request: NextRequest, error?: string) {
 
 export async function POST(request: NextRequest) {
   const formData = await request.formData();
-  const password = String(formData.get("password") || "");
-  const expected = process.env.DASHBOARD_PASSWORD;
+  const password = String(formData.get("password") || "").trim();
+  const expected = process.env.DASHBOARD_PASSWORD?.trim();
 
   if (!expected) {
     return redirectToLogin(request, "not_configured");
@@ -25,18 +26,23 @@ export async function POST(request: NextRequest) {
     return redirectToLogin(request, "incorrect");
   }
 
+  const cookieOptions = {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax" as const,
+    path: "/",
+    maxAge: 60 * 60 * 24 * 7,
+  };
+
+  const cookieStore = await cookies();
+  cookieStore.set(COOKIE_NAME, COOKIE_VALUE, cookieOptions);
+
   const response = NextResponse.redirect(
     new URL("/dashboard/inbox", request.url),
     303
   );
 
-  response.cookies.set(COOKIE_NAME, COOKIE_VALUE, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 7,
-  });
+  response.cookies.set(COOKIE_NAME, COOKIE_VALUE, cookieOptions);
 
   return response;
 }

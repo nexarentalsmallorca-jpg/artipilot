@@ -43,11 +43,6 @@ export function isAdminEmail(email: string | null | undefined): boolean {
   return getAdminEmails().includes(normalized);
 }
 
-export function getExtraPassword(): string | null {
-  const value = process.env.SITE_EXTRA_PASSWORD?.trim();
-  return value || null;
-}
-
 export const PUBLIC_ONLY_PATHS = new Set(["/"]);
 
 export const PRIVATE_PUBLIC_PATHS = new Set([

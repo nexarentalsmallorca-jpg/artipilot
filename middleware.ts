@@ -33,27 +33,11 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  /*
-    IMPORTANT:
-    Do NOT block API routes inside middleware.
-
-    Reason:
-    /api/debug-session already proved that the cookie exists,
-    but middleware was still blocking /api/inbox and saying cookieExists false.
-
-    So from now on:
-    - middleware protects dashboard pages only
-    - each API route checks its own auth/session
-  */
+  // Do not block API routes in middleware. API routes check their own auth.
   if (pathname.startsWith("/api")) {
     return NextResponse.next();
   }
 
-  /*
-    Public domain:
-    artipilot.com and www.artipilot.com must stay clean
-    for the future public SaaS website.
-  */
   if (isPublicHost) {
     if (pathname === "/") {
       return NextResponse.next();
@@ -64,10 +48,6 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  /*
-    Private dashboard domain:
-    private.artipilot.com
-  */
   if (isPrivateHost) {
     if (pathname === "/") {
       const url = request.nextUrl.clone();
@@ -102,10 +82,6 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  /*
-    Unknown host:
-    never expose private dashboard pages.
-  */
   if (pathname.startsWith("/dashboard")) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
