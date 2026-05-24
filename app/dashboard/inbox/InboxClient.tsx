@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ChatList, { type Contact } from "@/components/inbox/ChatList";
 import ChatWindow, { type Message } from "@/components/inbox/ChatWindow";
 import MessageComposer from "@/components/inbox/MessageComposer";
@@ -21,6 +21,46 @@ type QuickReply = {
   content: string;
 };
 
+function getContactKey(contact: Contact | null | undefined) {
+  return contact?.id || contact?.phone || null;
+}
+
+function sameMessageList(previous: Message[], next: Message[]) {
+  if (previous.length !== next.length) {
+    return false;
+  }
+
+  const previousLast = previous[previous.length - 1];
+  const nextLast = next[next.length - 1];
+
+  if (!previousLast && !nextLast) {
+    return true;
+  }
+
+  if (!previousLast || !nextLast) {
+    return false;
+  }
+
+  return (
+    previousLast.id === nextLast.id &&
+    previousLast.status === nextLast.status &&
+    previousLast.body === nextLast.body
+  );
+}
+
+function sortMessages(messages: Message[]) {
+  return [...messages].sort((a, b) => {
+    const first = new Date(a.created_at).getTime();
+    const second = new Date(b.created_at).getTime();
+
+    if (Number.isNaN(first) || Number.isNaN(second)) {
+      return 0;
+    }
+
+    return first - second;
+  });
+}
+
 export default function InboxClient({
   initialContacts = [],
 }: {
@@ -40,49 +80,75 @@ export default function InboxClient({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [messageError, setMessageError] = useState<string | null>(null);
 
+  const selectedIdRef = useRef<string | null>(selectedId);
+  const loadingMessagesRef = useRef(false);
+  const loadingContactsRef = useRef(false);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
   const selected = useMemo(() => {
-    return contacts.find((contact) => contact.id === selectedId) || null;
+    return contacts.find((contact) => getContactKey(contact) === selectedId) || null;
   }, [contacts, selectedId]);
 
-  const loadContacts = useCallback(async (silent = false) => {
-    try {
-      if (!silent) {
-        setLoadingContacts(true);
-      }
-
-      const result = await fetchContactsAction();
-
-      if (result.error) {
-        setLoadError(result.error);
+  const loadContacts = useCallback(
+    async (silent = false) => {
+      if (loadingContactsRef.current) {
         return;
       }
 
-      const nextContacts = result.contacts || [];
-      setContacts(nextContacts);
-      setLoadError(null);
+      loadingContactsRef.current = true;
 
-      setSelectedId((currentSelectedId) => {
-        if (currentSelectedId) {
-          const stillExists = nextContacts.some(
-            (contact) => contact.id === currentSelectedId
-          );
-
-          if (stillExists) {
-            return currentSelectedId;
-          }
+      try {
+        if (!silent) {
+          setLoadingContacts(true);
         }
 
-        return nextContacts[0]?.id || null;
-      });
-    } catch (error) {
-      console.error("Failed to load contacts:", error);
-      setLoadError("Could not load WhatsApp conversations.");
-    } finally {
-      if (!silent) {
-        setLoadingContacts(false);
+        const result = await fetchContactsAction();
+
+        if (result.error) {
+          if (!silent) {
+            setLoadError(result.error);
+          }
+
+          return;
+        }
+
+        const nextContacts = result.contacts || [];
+
+        setContacts(nextContacts);
+        setLoadError(null);
+
+        setSelectedId((currentSelectedId) => {
+          if (currentSelectedId) {
+            const stillExists = nextContacts.some(
+              (contact) => getContactKey(contact) === currentSelectedId
+            );
+
+            if (stillExists) {
+              return currentSelectedId;
+            }
+          }
+
+          return nextContacts[0]?.id || null;
+        });
+      } catch (error) {
+        console.error("Failed to load contacts:", error);
+
+        if (!silent) {
+          setLoadError("Could not load WhatsApp conversations.");
+        }
+      } finally {
+        loadingContactsRef.current = false;
+
+        if (!silent) {
+          setLoadingContacts(false);
+        }
       }
-    }
-  }, []);
+    },
+    []
+  );
 
   const loadQuickReplies = useCallback(async () => {
     try {
@@ -96,60 +162,105 @@ export default function InboxClient({
 
   const loadMessages = useCallback(
     async (contactId: string, silent = false) => {
+      if (!contactId) {
+        return;
+      }
+
+      if (loadingMessagesRef.current) {
+        return;
+      }
+
+      loadingMessagesRef.current = true;
+
       try {
         if (!silent) {
           setLoadingMessages(true);
         }
 
-        setMessageError(null);
+        if (!silent) {
+          setMessageError(null);
+        }
 
         const result = await fetchMessagesAction(contactId);
 
-        if (result.error) {
-          setMessages([]);
-          setMessageError(result.error);
+        if (selectedIdRef.current !== contactId) {
           return;
         }
 
-        setMessages(result.messages || []);
-        await loadContacts(true);
+        if (result.error) {
+          if (!silent) {
+            setMessageError(result.error);
+            setMessages([]);
+          }
+
+          return;
+        }
+
+        const nextMessages = sortMessages(result.messages || []);
+
+        setMessages((previousMessages) => {
+          if (sameMessageList(previousMessages, nextMessages)) {
+            return previousMessages;
+          }
+
+          return nextMessages;
+        });
+
+        setMessageError(null);
       } catch (error) {
         console.error("Failed to load messages:", error);
-        setMessages([]);
-        setMessageError("Could not load messages for this conversation.");
+
+        if (!silent) {
+          setMessages([]);
+          setMessageError("Could not load messages for this conversation.");
+        }
       } finally {
+        loadingMessagesRef.current = false;
+
         if (!silent) {
           setLoadingMessages(false);
         }
       }
     },
-    [loadContacts]
+    []
   );
 
   useEffect(() => {
     void loadContacts();
     void loadQuickReplies();
 
-    const timer = window.setInterval(() => {
+    const contactsTimer = window.setInterval(() => {
       void loadContacts(true);
-    }, 15000);
+    }, 6000);
 
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(contactsTimer);
+    };
   }, [loadContacts, loadQuickReplies]);
 
   useEffect(() => {
     if (!selectedId) {
       setMessages([]);
+      setMessageError(null);
       return;
     }
 
+    setMessages([]);
+    setMessageError(null);
+
     void loadMessages(selectedId);
 
-    const timer = window.setInterval(() => {
-      void loadMessages(selectedId, true);
-    }, 8000);
+    const messagesTimer = window.setInterval(() => {
+      const currentSelectedId = selectedIdRef.current;
 
-    return () => window.clearInterval(timer);
+      if (currentSelectedId) {
+        void loadMessages(currentSelectedId, true);
+      }
+    }, 3000);
+
+    return () => {
+      window.clearInterval(messagesTimer);
+    };
   }, [selectedId, loadMessages]);
 
   async function handleSelectContact(contactId: string) {
@@ -168,13 +279,16 @@ export default function InboxClient({
       throw new Error("Message cannot be empty.");
     }
 
-    const result = await sendMessageAction(selectedId, cleanBody);
+    const activeContactId = selectedId;
+
+    const result = await sendMessageAction(activeContactId, cleanBody);
 
     if (result.error) {
       throw new Error(result.error);
     }
 
-    await loadMessages(selectedId);
+    await loadMessages(activeContactId, true);
+    void loadContacts(true);
   }
 
   async function handleAiSuggest() {
@@ -196,12 +310,18 @@ export default function InboxClient({
       return;
     }
 
+    const contactKey = getContactKey(selected);
+
+    if (!contactKey) {
+      return;
+    }
+
     const previousValue = selected.ai_enabled;
     const nextValue = !previousValue;
 
     setContacts((previousContacts) =>
       previousContacts.map((contact) =>
-        contact.id === selected.id
+        getContactKey(contact) === contactKey
           ? { ...contact, ai_enabled: nextValue }
           : contact
       )
@@ -217,7 +337,7 @@ export default function InboxClient({
       if (result.contact) {
         setContacts((previousContacts) =>
           previousContacts.map((contact) =>
-            contact.id === selected.id
+            getContactKey(contact) === contactKey
               ? { ...contact, ...result.contact }
               : contact
           )
@@ -228,7 +348,7 @@ export default function InboxClient({
 
       setContacts((previousContacts) =>
         previousContacts.map((contact) =>
-          contact.id === selected.id
+          getContactKey(contact) === contactKey
             ? { ...contact, ai_enabled: previousValue }
             : contact
         )
