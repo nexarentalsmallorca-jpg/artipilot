@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  const denied = requirePrivateSession(request);
+  const denied = await requirePrivateSession(request);
   if (denied) return denied;
 
   if (!isSupabaseConfigured()) {
@@ -14,21 +14,29 @@ export async function GET(request: NextRequest) {
   }
 
   const db = getSupabaseAdmin();
-  const { data, error } = await db
+  let { data, error } = await db
     .from("artipilot_quick_replies")
     .select("*")
     .eq("active", true)
     .order("created_at", { ascending: true });
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const fallback = await db
+      .from("quick_replies")
+      .select("*")
+      .eq("active", true)
+      .order("created_at", { ascending: true });
+    if (fallback.error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    data = fallback.data;
   }
 
   return NextResponse.json({ items: data || [] });
 }
 
 export async function POST(request: NextRequest) {
-  const denied = requirePrivateSession(request);
+  const denied = await requirePrivateSession(request);
   if (denied) return denied;
 
   const body = await request.json();

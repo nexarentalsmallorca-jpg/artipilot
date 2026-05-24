@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  hasPrivateSessionFromRequest,
+  isPrivateSessionValid,
   requirePrivateSession,
 } from "@/lib/auth/private-session";
 import { isOpenAiConfigured } from "@/lib/ai/generateReply";
@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  const denied = requirePrivateSession(request);
+  const denied = await requirePrivateSession(request);
   if (denied) return denied;
 
   let totalContacts = 0;
@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.json({
-    hasPrivateSession: hasPrivateSessionFromRequest(request),
+    hasPrivateSession: await isPrivateSessionValid(request),
     supabaseConfigured: isSupabaseConfigured(),
     whatsappTokenConfigured: Boolean(process.env.WHATSAPP_ACCESS_TOKEN?.trim()),
     whatsappPhoneNumberIdConfigured: Boolean(

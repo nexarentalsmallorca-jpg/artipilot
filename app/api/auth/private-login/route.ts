@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
     return redirectToLogin(request, "incorrect");
   }
 
-  const options = getPrivateSessionCookieOptions();
+  const options = getPrivateSessionCookieOptions(request);
   const cookieStore = await cookies();
   cookieStore.set(PRIVATE_SESSION_COOKIE, PRIVATE_SESSION_VALUE, options);
 

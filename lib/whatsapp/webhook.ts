@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateAiReply, isOpenAiConfigured } from "@/lib/ai/generateReply";
+import {
+  getContactById,
+  insertInboundMessage,
+  insertOutboundMessage,
+  listMessagesForContact,
+  updateOutboundMessage,
+} from "@/lib/db/private-inbox";
 import { getSupabaseAdmin, isSupabaseConfigured } from "@/lib/supabase/admin";
 import { normalizePhone, sendWhatsAppText } from "@/lib/whatsapp/send";
 
@@ -19,7 +26,6 @@ type WaContact = {
 type WaStatus = {
   id?: string;
   status?: string;
-  recipient_id?: string;
 };
 
 function getVerifyToken() {
@@ -76,120 +82,13 @@ async function upsertContact(phone: string, profileName?: string | null) {
   return created.id as string;
 }
 
-async function saveInboundMessage(params: {
-  contactId: string;
-  phone: string;
-  waMessageId?: string;
-  body: string;
-  createdAt: string;
-  raw: unknown;
-}) {
-  const db = getSupabaseAdmin();
-
-  const { data: message, error } = await db
-    .from("artipilot_messages")
-    .insert({
-      contact_id: params.contactId,
-      phone: params.phone,
-      whatsapp_message_id: params.waMessageId || null,
-      direction: "inbound",
-      sender_type: "customer",
-      message_type: "text",
-      body: params.body,
-      status: "received",
-      raw_payload: params.raw,
-      created_at: params.createdAt,
-    })
-    .select("*")
-    .single();
-
-  if (error) throw error;
-
-  const { data: contact } = await db
-    .from("artipilot_contacts")
-    .select("unread_count")
-    .eq("id", params.contactId)
-    .single();
-
-  const unread = (contact?.unread_count ?? 0) + 1;
-
-  await db
-    .from("artipilot_contacts")
-    .update({
-      last_message: params.body,
-      last_message_at: params.createdAt,
-      unread_count: unread,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", params.contactId);
-
-  return message;
-}
-
-async function saveOutboundMessage(params: {
-  contactId: string;
-  phone: string;
-  body: string;
-  senderType: "admin" | "ai" | "system";
-  status: string;
-  waMessageId?: string | null;
-  statusError?: string | null;
-}) {
-  const db = getSupabaseAdmin();
-  const now = new Date().toISOString();
-
-  const { data: message, error } = await db
-    .from("artipilot_messages")
-    .insert({
-      contact_id: params.contactId,
-      phone: params.phone,
-      whatsapp_message_id: params.waMessageId || null,
-      direction: "outbound",
-      sender_type: params.senderType,
-      message_type: "text",
-      body: params.body,
-      status: params.status,
-      status_error: params.statusError || null,
-      created_at: now,
-    })
-    .select("*")
-    .single();
-
-  if (error) throw error;
-
-  await db
-    .from("artipilot_contacts")
-    .update({
-      last_message: params.body,
-      last_message_at: now,
-      updated_at: now,
-    })
-    .eq("id", params.contactId);
-
-  return message;
-}
-
 async function maybeAutoReply(contactId: string, phone: string, inboundBody: string) {
-  const db = getSupabaseAdmin();
-
-  const { data: contact } = await db
-    .from("artipilot_contacts")
-    .select("ai_enabled, name")
-    .eq("id", contactId)
-    .single();
-
-  if (!contact?.ai_enabled) return;
+  const contact = await getContactById(contactId);
+  if (!contact.ai_enabled) return;
   if (!isOpenAiConfigured()) return;
 
-  const { data: recent } = await db
-    .from("artipilot_messages")
-    .select("direction, sender_type, body")
-    .eq("contact_id", contactId)
-    .order("created_at", { ascending: false })
-    .limit(12);
-
-  const history = (recent || [])
-    .reverse()
+  const recent = await listMessagesForContact(contactId);
+  const history = recent
     .filter((m) => m.body)
     .map((m) => ({
       role:
@@ -212,25 +111,39 @@ async function maybeAutoReply(contactId: string, phone: string, inboundBody: str
   if (!replyText) return;
 
   const sendResult = await sendWhatsAppText(phone, replyText);
-
-  await saveOutboundMessage({
+  const pending = await insertOutboundMessage({
     contactId,
     phone,
     body: replyText,
     senderType: "ai",
     status: sendResult.ok ? "sent" : "failed",
-    waMessageId: sendResult.ok ? sendResult.messageId : null,
+    whatsappMessageId: sendResult.ok ? sendResult.messageId : null,
     statusError: sendResult.ok ? null : sendResult.error,
   });
+
+  if (!sendResult.ok && pending.id) {
+    await updateOutboundMessage(pending.id, {
+      status: "failed",
+      status_error: sendResult.error,
+    });
+  }
 }
 
 async function handleStatusUpdate(status: WaStatus) {
   if (!status.id || !status.status) return;
   const db = getSupabaseAdmin();
-  await db
+
+  const modern = await db
     .from("artipilot_messages")
     .update({ status: status.status })
     .eq("whatsapp_message_id", status.id);
+
+  if (modern.error) {
+    await db
+      .from("artipilot_messages")
+      .update({ delivery_status: status.status })
+      .eq("whatsapp_message_id", status.id);
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -296,7 +209,7 @@ export async function POST(request: NextRequest) {
 
     try {
       const contactId = await upsertContact(phone, profileName);
-      await saveInboundMessage({
+      await insertInboundMessage({
         contactId,
         phone,
         waMessageId: msg.id,

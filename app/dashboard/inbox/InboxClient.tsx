@@ -8,14 +8,17 @@ import MessageComposer from "@/components/inbox/MessageComposer";
 type Filter = "all" | "unread" | "ai_on" | "ai_off";
 
 async function privateFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method || "GET").toUpperCase();
+  const headers = new Headers(init?.headers);
+  if (method !== "GET" && method !== "HEAD" && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
   const res = await fetch(url, {
     ...init,
     credentials: "include",
     cache: "no-store",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers || {}),
-    },
+    headers,
   });
 
   const data = await res.json();
@@ -36,6 +39,7 @@ export default function InboxClient() {
     { id: string; title: string; content: string }[]
   >([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [messageError, setMessageError] = useState<string | null>(null);
 
   const selected = contacts.find((c) => c.id === selectedId) || null;
 
@@ -64,6 +68,7 @@ export default function InboxClient() {
 
   const loadMessages = useCallback(async (contactId: string) => {
     setLoadingMessages(true);
+    setMessageError(null);
     try {
       const data = await privateFetch<{ messages: Message[] }>(
         `/api/private/messages?contact_id=${encodeURIComponent(contactId)}`
@@ -72,7 +77,9 @@ export default function InboxClient() {
       await loadContacts();
     } catch (e) {
       setMessages([]);
-      setLoadError(e instanceof Error ? e.message : "Failed to load messages");
+      setMessageError(
+        e instanceof Error ? e.message : "Failed to load messages"
+      );
     } finally {
       setLoadingMessages(false);
     }
@@ -152,7 +159,12 @@ export default function InboxClient() {
           onSelect={setSelectedId}
         />
       </div>
-      <div className="hidden min-w-0 flex-1 flex-col md:flex">
+      <div className="flex min-w-0 flex-1 flex-col">
+        {messageError ? (
+          <p className="border-b border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-300">
+            {messageError}
+          </p>
+        ) : null}
         <div className="min-h-0 flex-1">
           <ChatWindow
             contact={selected}
