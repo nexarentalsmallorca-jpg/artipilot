@@ -1,19 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PRIVATE_SESSION_COOKIE } from "@/lib/auth/private-session";
+import {
+  hasPrivateSessionFromRequest,
+  PRIVATE_SESSION_COOKIE,
+} from "@/lib/auth/private-session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  const cookie = request.cookies.get(PRIVATE_SESSION_COOKIE)?.value;
-  const cookieNames = request.cookies.getAll().map((c) => c.name);
-
+  const cookie = request.cookies.get(PRIVATE_SESSION_COOKIE);
   return NextResponse.json({
-    hasSession: cookie === "authenticated",
-    cookieExists: Boolean(cookie),
+    hasSession: hasPrivateSessionFromRequest(request),
+    cookieExists: Boolean(cookie?.value),
+    cookieNames: request.cookies.getAll().map((c) => c.name),
     host: request.headers.get("host"),
-    cookieNames,
-    passwordConfigured: Boolean(process.env.DASHBOARD_PASSWORD?.trim()),
-    timestamp: new Date().toISOString(),
   });
 }

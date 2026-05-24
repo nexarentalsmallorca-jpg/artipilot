@@ -1,27 +1,17 @@
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-
-export default async function HomePage() {
-  const headersList = await headers();
-  const host = headersList.get("host") || "";
-  const hostname = host.split(":")[0].toLowerCase();
-
-  const privateHost =
-    process.env.PRIVATE_DASHBOARD_HOST || "private.artipilot.com";
-
-  if (hostname === privateHost) {
-    redirect("/login");
-  }
-
+export default function ComingSoonPage() {
   return (
-    <main className="min-h-screen bg-[#071116] text-white flex items-center justify-center">
-      <div className="text-center">
-        <h1 className="text-3xl font-bold">Artipilot Public</h1>
-        <p className="mt-4 text-slate-400">Coming soon public site.</p>
-        <p className="mt-6 text-xs text-slate-600">
-          Host: {hostname}
-        </p>
+    <main className="flex min-h-screen flex-col items-center justify-center bg-[#030509] px-6 text-center text-white">
+      <div className="mb-8 flex h-24 w-24 items-center justify-center rounded-2xl bg-emerald-500/10 text-3xl font-bold text-emerald-400">
+        A
       </div>
+      <p className="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-400">
+        Artipilot
+      </p>
+      <h1 className="mt-4 text-4xl font-semibold sm:text-5xl">Coming Soon</h1>
+      <p className="mt-4 max-w-md text-slate-400">
+        We are rebuilding the public Artipilot SaaS experience. The private
+        dashboard is available on the private domain only.
+      </p>
     </main>
   );
 }

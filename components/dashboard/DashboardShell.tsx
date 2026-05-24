@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAV = [
-  { href: "/dashboard/inbox", label: "Home" },
   { href: "/dashboard/inbox", label: "Inbox" },
   { href: "/dashboard/training", label: "Training" },
   { href: "/dashboard/quick-replies", label: "Quick Replies" },
@@ -12,7 +11,11 @@ const NAV = [
   { href: "/dashboard/status", label: "Status" },
 ];
 
-export default function DashboardShell({ children }: { children: React.ReactNode }) {
+export default function DashboardShell({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const pathname = usePathname();
 
   return (
@@ -30,7 +33,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
               pathname === item.href || pathname.startsWith(`${item.href}/`);
             return (
               <Link
-                key={item.label}
+                key={item.href}
                 href={item.href}
                 className={`rounded-lg px-3 py-2.5 text-sm font-medium transition ${
                   active
@@ -56,7 +59,9 @@ export default function DashboardShell({ children }: { children: React.ReactNode
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-white/10 bg-[#111B21] px-4 py-3 md:hidden">
           <div>
-            <span className="text-[10px] font-bold uppercase text-[#00A884]">Private</span>
+            <span className="text-[10px] font-bold uppercase text-[#00A884]">
+              Private
+            </span>
             <p className="text-sm font-semibold">Artipilot</p>
           </div>
           <Link href="/logout" className="text-sm text-[#8696A0]">
@@ -66,10 +71,12 @@ export default function DashboardShell({ children }: { children: React.ReactNode
         <nav className="flex gap-1 overflow-x-auto border-b border-white/10 bg-[#111B21] px-2 py-2 md:hidden">
           {NAV.map((item) => (
             <Link
-              key={item.label}
+              key={item.href}
               href={item.href}
               className={`shrink-0 rounded-lg px-3 py-1.5 text-xs ${
-                pathname === item.href ? "bg-[#00A884]/15 text-[#00A884]" : "text-[#8696A0]"
+                pathname === item.href
+                  ? "bg-[#00A884]/15 text-[#00A884]"
+                  : "text-[#8696A0]"
               }`}
             >
               {item.label}
