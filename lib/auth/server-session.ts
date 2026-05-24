@@ -6,13 +6,17 @@ import {
 
 export async function hasPrivateSessionServer() {
   const cookieStore = await cookies();
-  return (
-    cookieStore.get(PRIVATE_SESSION_COOKIE)?.value === PRIVATE_SESSION_VALUE
-  );
+  const sessionValue = cookieStore.get(PRIVATE_SESSION_COOKIE)?.value;
+
+  return sessionValue === PRIVATE_SESSION_VALUE;
 }
 
 export async function assertPrivateSessionServer() {
-  if (!(await hasPrivateSessionServer())) {
-    throw new Error("Unauthorized");
+  const isValid = await hasPrivateSessionServer();
+
+  if (!isValid) {
+    throw new Error("Unauthorized. Please log in again.");
   }
+
+  return true;
 }

@@ -16,20 +16,46 @@ import {
 import { getSupabaseAdmin, isSupabaseConfigured } from "@/lib/supabase/admin";
 import { isWhatsAppConfigured, sendWhatsAppText } from "@/lib/whatsapp/send";
 
+type QuickReply = {
+  id: string;
+  title: string;
+  content: string;
+};
+
+function cleanString(value: unknown) {
+  return String(value || "").trim();
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
 export async function fetchContactsAction(): Promise<{
   contacts: ApiContact[];
   error?: string;
 }> {
   try {
     await assertPrivateSessionServer();
+
     if (!isSupabaseConfigured()) {
-      return { contacts: [] };
+      return {
+        contacts: [],
+        error: "Supabase is not configured.",
+      };
     }
+
     const contacts = await listContacts();
-    return { contacts };
+
+    return {
+      contacts: contacts || [],
+    };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to load contacts";
-    return { contacts: [], error: message };
+    console.error("fetchContactsAction error:", error);
+
+    return {
+      contacts: [],
+      error: getErrorMessage(error, "Failed to load contacts."),
+    };
   }
 }
 
@@ -39,18 +65,41 @@ export async function fetchMessagesAction(contactId: string): Promise<{
 }> {
   try {
     await assertPrivateSessionServer();
-    if (!contactId) {
-      return { messages: [], error: "contact_id required" };
+
+    const cleanContactId = cleanString(contactId);
+
+    if (!cleanContactId) {
+      return {
+        messages: [],
+        error: "Contact ID is required.",
+      };
     }
+
     if (!isSupabaseConfigured()) {
-      return { messages: [] };
+      return {
+        messages: [],
+        error: "Supabase is not configured.",
+      };
     }
-    const messages = await listMessagesForContact(contactId);
-    await markContactRead(contactId);
-    return { messages };
+
+    const messages = await listMessagesForContact(cleanContactId);
+
+    try {
+      await markContactRead(cleanContactId);
+    } catch (markReadError) {
+      console.error("markContactRead error:", markReadError);
+    }
+
+    return {
+      messages: messages || [],
+    };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to load messages";
-    return { messages: [], error: message };
+    console.error("fetchMessagesAction error:", error);
+
+    return {
+      messages: [],
+      error: getErrorMessage(error, "Failed to load messages."),
+    };
   }
 }
 
@@ -60,19 +109,44 @@ export async function sendMessageAction(
 ): Promise<{ message?: ApiMessage; error?: string }> {
   try {
     await assertPrivateSessionServer();
-    const text = body.trim();
-    if (!contactId || !text) {
-      return { error: "contact_id and body are required" };
-    }
-    if (!isSupabaseConfigured()) {
-      return { error: "Supabase is not configured" };
-    }
-    if (!isWhatsAppConfigured()) {
-      return { error: "WhatsApp sender is not configured." };
+
+    const cleanContactId = cleanString(contactId);
+    const text = cleanString(body);
+
+    if (!cleanContactId) {
+      return {
+        error: "Contact ID is required.",
+      };
     }
 
-    const contact = await getContactById(contactId);
-    const pending = await insertOutboundMessage({
+    if (!text) {
+      return {
+        error: "Message body is required.",
+      };
+    }
+
+    if (!isSupabaseConfigured()) {
+      return {
+        error: "Supabase is not configured.",
+      };
+    }
+
+    if (!isWhatsAppConfigured()) {
+      return {
+        error:
+          "WhatsApp sender is not configured. Check your Vercel environment variables.",
+      };
+    }
+
+    const contact = await getContactById(cleanContactId);
+
+    if (!contact?.id || !contact.phone) {
+      return {
+        error: "Contact was not found or phone number is missing.",
+      };
+    }
+
+    const pendingMessage = await insertOutboundMessage({
       contactId: contact.id,
       phone: contact.phone,
       body: text,
@@ -81,7 +155,8 @@ export async function sendMessageAction(
     });
 
     const sendResult = await sendWhatsAppText(contact.phone, text);
-    const saved = await updateOutboundMessage(pending.id, {
+
+    const savedMessage = await updateOutboundMessage(pendingMessage.id, {
       status: sendResult.ok ? "sent" : "failed",
       status_error: sendResult.ok ? null : sendResult.error,
       whatsapp_message_id: sendResult.ok ? sendResult.messageId : null,
@@ -90,13 +165,21 @@ export async function sendMessageAction(
     await touchContactLastMessage(contact.id, text);
 
     if (!sendResult.ok) {
-      return { message: saved, error: sendResult.error };
+      return {
+        message: savedMessage,
+        error: sendResult.error || "WhatsApp message failed to send.",
+      };
     }
 
-    return { message: saved };
+    return {
+      message: savedMessage,
+    };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Send failed";
-    return { error: message };
+    console.error("sendMessageAction error:", error);
+
+    return {
+      error: getErrorMessage(error, "Send failed."),
+    };
   }
 }
 
@@ -106,48 +189,90 @@ export async function toggleAiAction(
 ): Promise<{ contact?: ApiContact; error?: string }> {
   try {
     await assertPrivateSessionServer();
-    const contact = await updateContactAi(contactId, aiEnabled);
-    return { contact };
+
+    const cleanContactId = cleanString(contactId);
+
+    if (!cleanContactId) {
+      return {
+        error: "Contact ID is required.",
+      };
+    }
+
+    if (!isSupabaseConfigured()) {
+      return {
+        error: "Supabase is not configured.",
+      };
+    }
+
+    const contact = await updateContactAi(cleanContactId, Boolean(aiEnabled));
+
+    return {
+      contact,
+    };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Update failed";
-    return { error: message };
+    console.error("toggleAiAction error:", error);
+
+    return {
+      error: getErrorMessage(error, "Could not update AI status."),
+    };
   }
 }
 
 export async function fetchQuickRepliesAction(): Promise<{
-  items: { id: string; title: string; content: string }[];
+  items: QuickReply[];
 }> {
   try {
     await assertPrivateSessionServer();
+
     if (!isSupabaseConfigured()) {
-      return { items: [] };
+      return {
+        items: [],
+      };
     }
 
     const db = getSupabaseAdmin();
-    let { data, error } = await db
+
+    const primary = await db
       .from("artipilot_quick_replies")
-      .select("*")
+      .select("id,title,content,active,created_at")
       .eq("active", true)
       .order("created_at", { ascending: true });
 
-    if (error) {
-      const fallback = await db
-        .from("quick_replies")
-        .select("*")
-        .eq("active", true)
-        .order("created_at", { ascending: true });
-      data = fallback.data;
+    if (!primary.error && primary.data) {
+      return {
+        items: primary.data.map((row) => ({
+          id: String(row.id),
+          title: String(row.title || "Quick reply"),
+          content: String(row.content || ""),
+        })),
+      };
+    }
+
+    const fallback = await db
+      .from("quick_replies")
+      .select("id,title,content,active,created_at")
+      .eq("active", true)
+      .order("created_at", { ascending: true });
+
+    if (fallback.error || !fallback.data) {
+      return {
+        items: [],
+      };
     }
 
     return {
-      items: (data || []).map((row) => ({
+      items: fallback.data.map((row) => ({
         id: String(row.id),
-        title: String(row.title),
-        content: String(row.content),
+        title: String(row.title || "Quick reply"),
+        content: String(row.content || ""),
       })),
     };
-  } catch {
-    return { items: [] };
+  } catch (error) {
+    console.error("fetchQuickRepliesAction error:", error);
+
+    return {
+      items: [],
+    };
   }
 }
 
@@ -157,39 +282,75 @@ export async function suggestAiAction(contactId: string): Promise<{
 }> {
   try {
     await assertPrivateSessionServer();
+
+    const cleanContactId = cleanString(contactId);
+
+    if (!cleanContactId) {
+      return {
+        error: "Contact ID is required.",
+      };
+    }
+
+    if (!isSupabaseConfigured()) {
+      return {
+        error: "Supabase is not configured.",
+      };
+    }
+
     const { generateAiReply, isOpenAiConfigured } = await import(
       "@/lib/ai/generateReply"
     );
 
     if (!isOpenAiConfigured()) {
-      return { error: "OpenAI is not configured" };
+      return {
+        error: "OpenAI is not configured.",
+      };
     }
 
-    const messages = await listMessagesForContact(contactId);
-    const lastInbound = [...messages].reverse().find((m) => m.direction === "inbound");
+    const messages = await listMessagesForContact(cleanContactId);
 
-    if (!lastInbound?.body) {
-      return { error: "No inbound message to reply to" };
+    const lastInboundMessage = [...messages]
+      .reverse()
+      .find((message) => message.direction === "inbound" && message.body);
+
+    if (!lastInboundMessage?.body) {
+      return {
+        error: "No customer message found to reply to.",
+      };
     }
 
-    const history = messages
-      .filter((m) => m.body)
-      .map((m) => ({
+    const recentMessages = messages
+      .filter((message) => message.body)
+      .slice(-20)
+      .map((message) => ({
         role:
-          m.direction === "inbound"
+          message.direction === "inbound"
             ? ("user" as const)
             : ("assistant" as const),
-        content: String(m.body),
+        content: String(message.body || ""),
       }));
 
     const suggestion = await generateAiReply({
-      customerMessage: String(lastInbound.body),
-      recentMessages: history,
+      customerMessage: String(lastInboundMessage.body),
+      recentMessages,
     });
 
-    return { suggestion };
+    const cleanSuggestion = cleanString(suggestion);
+
+    if (!cleanSuggestion) {
+      return {
+        error: "AI returned an empty reply.",
+      };
+    }
+
+    return {
+      suggestion: cleanSuggestion,
+    };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "AI suggestion failed";
-    return { error: message };
+    console.error("suggestAiAction error:", error);
+
+    return {
+      error: getErrorMessage(error, "AI suggestion failed."),
+    };
   }
 }

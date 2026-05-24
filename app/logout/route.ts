@@ -1,19 +1,36 @@
-import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import {
-  getPrivateSessionCookieOptions,
+  getExpiredPrivateSessionCookieOptions,
   PRIVATE_SESSION_COOKIE,
 } from "@/lib/auth/private-session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(request: NextRequest) {
-  const clear = { ...getPrivateSessionCookieOptions(request), maxAge: 0 };
-  const cookieStore = await cookies();
-  cookieStore.set(PRIVATE_SESSION_COOKIE, "", clear);
+function redirectToLogin(request: NextRequest) {
+  return NextResponse.redirect(new URL("/login", request.url), 303);
+}
 
-  const response = NextResponse.redirect(new URL("/login", request.url), 303);
-  response.cookies.set(PRIVATE_SESSION_COOKIE, "", clear);
+export async function GET(request: NextRequest) {
+  const response = redirectToLogin(request);
+
+  response.cookies.set(
+    PRIVATE_SESSION_COOKIE,
+    "",
+    getExpiredPrivateSessionCookieOptions(request)
+  );
+
+  return response;
+}
+
+export async function POST(request: NextRequest) {
+  const response = redirectToLogin(request);
+
+  response.cookies.set(
+    PRIVATE_SESSION_COOKIE,
+    "",
+    getExpiredPrivateSessionCookieOptions(request)
+  );
+
   return response;
 }

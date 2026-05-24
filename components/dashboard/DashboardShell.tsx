@@ -4,12 +4,20 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAV = [
-  { href: "/dashboard/inbox", label: "Inbox" },
-  { href: "/dashboard/training", label: "Training" },
-  { href: "/dashboard/quick-replies", label: "Quick Replies" },
-  { href: "/dashboard/settings", label: "Settings" },
-  { href: "/dashboard/status", label: "Status" },
+  { href: "/dashboard/inbox", label: "Inbox", shortLabel: "Inbox" },
+  { href: "/dashboard/training", label: "AI Training", shortLabel: "Training" },
+  {
+    href: "/dashboard/quick-replies",
+    label: "Quick Replies",
+    shortLabel: "Replies",
+  },
+  { href: "/dashboard/settings", label: "Settings", shortLabel: "Settings" },
+  { href: "/dashboard/status", label: "System Status", shortLabel: "Status" },
 ];
+
+function isActivePath(pathname: string, href: string) {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
 
 export default function DashboardShell({
   children,
@@ -19,37 +27,51 @@ export default function DashboardShell({
   const pathname = usePathname();
 
   return (
-    <div className="flex min-h-screen bg-[#0B141A] text-[#E9EDEF]">
-      <aside className="hidden w-56 shrink-0 flex-col border-r border-white/10 bg-[#111B21] md:flex">
+    <div className="flex h-[100dvh] overflow-hidden bg-[#0b141a] text-[#e9edef]">
+      <aside className="hidden w-60 shrink-0 flex-col border-r border-white/10 bg-[#111b21] md:flex">
         <div className="border-b border-white/10 px-5 py-5">
-          <span className="inline-block rounded-full bg-[#00A884]/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#00A884]">
-            Private
+          <div className="mb-3 flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#00a884]/15 text-base font-black text-[#00a884]">
+              A
+            </div>
+
+            <div className="min-w-0">
+              <p className="text-base font-black tracking-tight">Artipilot</p>
+              <p className="text-xs text-[#8696a0]">Private WhatsApp AI</p>
+            </div>
+          </div>
+
+          <span className="inline-flex rounded-full bg-[#00a884]/15 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-[#00a884]">
+            Private system
           </span>
-          <p className="mt-2 text-lg font-semibold">Artipilot</p>
         </div>
-        <nav className="flex flex-1 flex-col gap-1 p-3">
+
+        <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-3">
           {NAV.map((item) => {
-            const active =
-              pathname === item.href || pathname.startsWith(`${item.href}/`);
+            const active = isActivePath(pathname, item.href);
+
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                className={`rounded-lg px-3 py-2.5 text-sm font-medium transition ${
+                className={[
+                  "rounded-xl px-3 py-3 text-sm font-bold transition",
                   active
-                    ? "bg-[#00A884]/15 text-[#00A884]"
-                    : "text-[#8696A0] hover:bg-white/5 hover:text-white"
-                }`}
+                    ? "bg-[#00a884]/15 text-[#00a884]"
+                    : "text-[#8696a0] hover:bg-white/[0.06] hover:text-white",
+                ].join(" ")}
               >
                 {item.label}
               </Link>
             );
           })}
         </nav>
+
         <div className="border-t border-white/10 p-3">
           <Link
             href="/logout"
-            className="block rounded-lg px-3 py-2.5 text-sm text-[#8696A0] hover:bg-red-500/10 hover:text-red-300"
+            prefetch={false}
+            className="block rounded-xl px-3 py-3 text-sm font-bold text-[#8696a0] transition hover:bg-red-500/10 hover:text-red-300"
           >
             Log out
           </Link>
@@ -57,33 +79,51 @@ export default function DashboardShell({
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-white/10 bg-[#111B21] px-4 py-3 md:hidden">
-          <div>
-            <span className="text-[10px] font-bold uppercase text-[#00A884]">
-              Private
-            </span>
-            <p className="text-sm font-semibold">Artipilot</p>
+        <header className="flex shrink-0 items-center justify-between border-b border-white/10 bg-[#111b21] px-4 py-3 md:hidden">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#00a884]/15 text-sm font-black text-[#00a884]">
+              A
+            </div>
+
+            <div className="min-w-0">
+              <p className="truncate text-sm font-black">Artipilot</p>
+              <p className="truncate text-[11px] text-[#8696a0]">
+                Private WhatsApp AI
+              </p>
+            </div>
           </div>
-          <Link href="/logout" className="text-sm text-[#8696A0]">
+
+          <Link
+            href="/logout"
+            prefetch={false}
+            className="shrink-0 rounded-full bg-white/[0.06] px-3 py-2 text-xs font-bold text-[#8696a0] hover:bg-red-500/10 hover:text-red-300"
+          >
             Log out
           </Link>
         </header>
-        <nav className="flex gap-1 overflow-x-auto border-b border-white/10 bg-[#111B21] px-2 py-2 md:hidden">
-          {NAV.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`shrink-0 rounded-lg px-3 py-1.5 text-xs ${
-                pathname === item.href
-                  ? "bg-[#00A884]/15 text-[#00A884]"
-                  : "text-[#8696A0]"
-              }`}
-            >
-              {item.label}
-            </Link>
-          ))}
+
+        <nav className="flex shrink-0 gap-2 overflow-x-auto border-b border-white/10 bg-[#111b21] px-2 py-2 md:hidden">
+          {NAV.map((item) => {
+            const active = isActivePath(pathname, item.href);
+
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={[
+                  "shrink-0 rounded-full px-3 py-2 text-xs font-black transition",
+                  active
+                    ? "bg-[#00a884]/15 text-[#00a884]"
+                    : "bg-white/[0.04] text-[#8696a0] hover:bg-white/[0.08] hover:text-white",
+                ].join(" ")}
+              >
+                {item.shortLabel}
+              </Link>
+            );
+          })}
         </nav>
-        <main className="min-h-0 flex-1">{children}</main>
+
+        <main className="min-h-0 flex-1 overflow-hidden">{children}</main>
       </div>
     </div>
   );

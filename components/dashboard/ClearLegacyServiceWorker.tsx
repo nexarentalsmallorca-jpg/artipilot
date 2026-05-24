@@ -4,13 +4,27 @@ import { useEffect } from "react";
 
 export default function ClearLegacyServiceWorker() {
   useEffect(() => {
-    if (!("serviceWorker" in navigator)) return;
+    async function clearLegacyCache() {
+      try {
+        if ("serviceWorker" in navigator) {
+          const registrations = await navigator.serviceWorker.getRegistrations();
 
-    void navigator.serviceWorker.getRegistrations().then((registrations) => {
-      for (const registration of registrations) {
-        void registration.unregister();
+          await Promise.all(
+            registrations.map((registration) => registration.unregister())
+          );
+        }
+
+        if ("caches" in window) {
+          const cacheNames = await caches.keys();
+
+          await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName)));
+        }
+      } catch (error) {
+        console.warn("Legacy cache cleanup failed:", error);
       }
-    });
+    }
+
+    void clearLegacyCache();
   }, []);
 
   return null;
