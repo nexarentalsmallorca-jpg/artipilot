@@ -38,7 +38,8 @@ function isSchemaError(error: unknown) {
     message.includes("column") ||
     message.includes("schema cache") ||
     message.includes("could not find") ||
-    message.includes("does not exist")
+    message.includes("does not exist") ||
+    message.includes("relation")
   );
 }
 
@@ -266,22 +267,6 @@ export async function listMessagesForContact(
   const contact = await getContactById(contactId);
   const phones = phoneLookupVariants(contact.phone);
 
-  const byContactId = await db
-    .from("artipilot_messages")
-    .select("*")
-    .eq("contact_id", contactId)
-    .order("created_at", { ascending: true });
-
-  if (!byContactId.error) {
-    return (byContactId.data || []).map((row) =>
-      normalizeMessageRow(row as Record<string, unknown>)
-    );
-  }
-
-  if (!isSchemaError(byContactId.error)) {
-    throw byContactId.error;
-  }
-
   for (const phone of phones) {
     const byContactPhone = await db
       .from("artipilot_messages")
@@ -289,30 +274,14 @@ export async function listMessagesForContact(
       .eq("contact_phone", phone)
       .order("created_at", { ascending: true });
 
-    if (!byContactPhone.error && (byContactPhone.data?.length || 0) > 0) {
+    if (!byContactPhone.error) {
       return (byContactPhone.data || []).map((row) =>
         normalizeMessageRow(row as Record<string, unknown>)
       );
     }
 
-    if (byContactPhone.error && !isSchemaError(byContactPhone.error)) {
+    if (!isSchemaError(byContactPhone.error)) {
       throw byContactPhone.error;
-    }
-
-    const byPhone = await db
-      .from("artipilot_messages")
-      .select("*")
-      .eq("phone", phone)
-      .order("created_at", { ascending: true });
-
-    if (!byPhone.error && (byPhone.data?.length || 0) > 0) {
-      return (byPhone.data || []).map((row) =>
-        normalizeMessageRow(row as Record<string, unknown>)
-      );
-    }
-
-    if (byPhone.error && !isSchemaError(byPhone.error)) {
-      throw byPhone.error;
     }
   }
 
@@ -389,32 +358,43 @@ export async function insertOutboundMessage(params: {
   const db = getSupabaseAdmin();
   const phone = normalizePhone(params.phone);
   const senderType = params.senderType || "admin";
-  const status = params.status || "pending";
+  const status = params.status || "sent";
   const now = new Date().toISOString();
 
-  const legacyPayload = {
-    contact_id: params.contactId,
+  const fullPayload = {
     contact_phone: phone,
-    direction: "outbound",
+    whatsapp_message_id: params.whatsappMessageId ?? null,
     role: mapSenderTypeToRole(senderType),
-    sender_type: senderType,
-    message_type: "text",
+    direction: "outbound",
+    message_type: senderType === "system" ? "system" : "text",
     content: params.body,
     delivery_status: status,
-    whatsapp_message_id: params.whatsappMessageId ?? null,
     created_at: now,
     updated_at: now,
   };
 
-  const minimalPayload = {
-    contact_id: params.contactId,
-    direction: "outbound",
+  const simplePayload = {
+    contact_phone: phone,
+    whatsapp_message_id: params.whatsappMessageId ?? null,
     role: mapSenderTypeToRole(senderType),
+    direction: "outbound",
+    message_type: "text",
     content: params.body,
     created_at: now,
   };
 
-  return insertMessageWithFallback(db, [legacyPayload, minimalPayload]);
+  const minimalPayload = {
+    contact_phone: phone,
+    role: mapSenderTypeToRole(senderType),
+    direction: "outbound",
+    content: params.body,
+  };
+
+  return insertMessageWithFallback(db, [
+    fullPayload,
+    simplePayload,
+    minimalPayload,
+  ]);
 }
 
 export async function updateOutboundMessage(
@@ -424,29 +404,25 @@ export async function updateOutboundMessage(
   const db = getSupabaseAdmin();
   const now = new Date().toISOString();
 
-  const legacyUpdates: Record<string, unknown> = {
+  const fullUpdates: Record<string, unknown> = {
     updated_at: now,
   };
 
   if (updates.status) {
-    legacyUpdates.delivery_status = updates.status;
-  }
-
-  if (updates.status_error) {
-    legacyUpdates.status_error = updates.status_error;
+    fullUpdates.delivery_status = updates.status;
   }
 
   if (updates.whatsapp_message_id) {
-    legacyUpdates.whatsapp_message_id = updates.whatsapp_message_id;
+    fullUpdates.whatsapp_message_id = updates.whatsapp_message_id;
   }
 
   if (updates.body) {
-    legacyUpdates.content = updates.body;
+    fullUpdates.content = updates.body;
   }
 
   const primary = await db
     .from("artipilot_messages")
-    .update(legacyUpdates)
+    .update(fullUpdates)
     .eq("id", messageId)
     .select("*")
     .single();
@@ -459,15 +435,19 @@ export async function updateOutboundMessage(
     throw primary.error;
   }
 
-  const minimalUpdates: Record<string, unknown> = {};
+  const simpleUpdates: Record<string, unknown> = {};
+
+  if (updates.whatsapp_message_id) {
+    simpleUpdates.whatsapp_message_id = updates.whatsapp_message_id;
+  }
 
   if (updates.body) {
-    minimalUpdates.content = updates.body;
+    simpleUpdates.content = updates.body;
   }
 
   const fallback = await db
     .from("artipilot_messages")
-    .update(minimalUpdates)
+    .update(simpleUpdates)
     .eq("id", messageId)
     .select("*")
     .single();
@@ -492,13 +472,11 @@ export async function insertInboundMessage(params: {
   const createdAt = params.createdAt || new Date().toISOString();
   const now = new Date().toISOString();
 
-  const legacyPayload = {
-    contact_id: params.contactId,
+  const fullPayload = {
     contact_phone: phone,
     whatsapp_message_id: params.waMessageId || null,
-    direction: "inbound",
     role: "customer",
-    sender_type: "customer",
+    direction: "inbound",
     message_type: "text",
     content: params.body,
     delivery_status: "received",
@@ -507,16 +485,27 @@ export async function insertInboundMessage(params: {
     updated_at: now,
   };
 
-  const minimalPayload = {
-    contact_id: params.contactId,
-    direction: "inbound",
+  const simplePayload = {
+    contact_phone: phone,
+    whatsapp_message_id: params.waMessageId || null,
     role: "customer",
+    direction: "inbound",
+    message_type: "text",
+    content: params.body,
+    created_at: createdAt,
+  };
+
+  const minimalPayload = {
+    contact_phone: phone,
+    role: "customer",
+    direction: "inbound",
     content: params.body,
     created_at: createdAt,
   };
 
   const message = await insertMessageWithFallback(db, [
-    legacyPayload,
+    fullPayload,
+    simplePayload,
     minimalPayload,
   ]);
 
