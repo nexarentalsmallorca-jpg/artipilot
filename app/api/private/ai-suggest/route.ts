@@ -29,7 +29,6 @@ export async function POST(request: NextRequest) {
     .from("artipilot_messages")
     .select("direction, body, created_at")
     .eq("contact_id", contactId)
-    .eq("deleted_for_me", false)
     .order("created_at", { ascending: false })
     .limit(20);
 

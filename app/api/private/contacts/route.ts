@@ -17,7 +17,6 @@ export async function GET(request: NextRequest) {
   const { data, error } = await db
     .from("artipilot_contacts")
     .select("*")
-    .eq("archived", false)
     .order("last_message_at", { ascending: false, nullsFirst: false });
 
   if (error) {

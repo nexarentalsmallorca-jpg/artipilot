@@ -23,7 +23,6 @@ export async function GET(request: NextRequest) {
     .from("artipilot_messages")
     .select("*")
     .eq("contact_id", contactId)
-    .eq("deleted_for_me", false)
     .order("created_at", { ascending: true });
 
   if (error) {
