@@ -6,19 +6,26 @@ export const PRIVATE_SESSION_VALUE = "authenticated";
 
 const SEVEN_DAYS = 60 * 60 * 24 * 7;
 
+function readCookieFromHeader(cookieHeader: string | null, name: string) {
+  if (!cookieHeader) return undefined;
+  const parts = cookieHeader.split(";");
+  for (const part of parts) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) {
+      return decodeURIComponent(rest.join("="));
+    }
+  }
+  return undefined;
+}
+
 export function getPrivateSessionCookieOptions(request?: NextRequest) {
-  const proto = request?.headers
-    .get("x-forwarded-proto")
-    ?.split(",")[0]
-    ?.trim();
-  const secure =
-    proto === "https" ||
-    process.env.VERCEL === "1" ||
-    process.env.NODE_ENV === "production";
+  const host = request?.headers.get("host") || "";
+  const hostname = host.split(":")[0].toLowerCase();
+  const isLocal = hostname === "localhost" || hostname === "127.0.0.1";
 
   return {
     httpOnly: true,
-    secure,
+    secure: !isLocal,
     sameSite: "lax" as const,
     path: "/",
     maxAge: SEVEN_DAYS,
@@ -26,10 +33,18 @@ export function getPrivateSessionCookieOptions(request?: NextRequest) {
 }
 
 export function hasPrivateSessionFromRequest(request: NextRequest) {
-  return (
+  const fromJar =
     request.cookies.get(PRIVATE_SESSION_COOKIE)?.value ===
-    PRIVATE_SESSION_VALUE
+    PRIVATE_SESSION_VALUE;
+
+  if (fromJar) return true;
+
+  const fromHeader = readCookieFromHeader(
+    request.headers.get("cookie"),
+    PRIVATE_SESSION_COOKIE
   );
+
+  return fromHeader === PRIVATE_SESSION_VALUE;
 }
 
 export async function hasPrivateSessionFromCookies() {

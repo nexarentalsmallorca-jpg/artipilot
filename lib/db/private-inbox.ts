@@ -127,10 +127,19 @@ export async function getContactById(contactId: string) {
   return normalizeContactRow(data as Record<string, unknown>);
 }
 
+function phoneLookupVariants(phone: string) {
+  const digits = normalizePhone(phone);
+  const variants = new Set<string>();
+  if (digits) variants.add(digits);
+  if (digits) variants.add(`+${digits}`);
+  if (digits.startsWith("34")) variants.add(digits.slice(2));
+  return [...variants];
+}
+
 export async function listMessagesForContact(contactId: string): Promise<ApiMessage[]> {
   const db = getSupabaseAdmin();
   const contact = await getContactById(contactId);
-  const phone = normalizePhone(contact.phone);
+  const phones = phoneLookupVariants(contact.phone);
 
   const byContactId = await db
     .from("artipilot_messages")
@@ -138,27 +147,41 @@ export async function listMessagesForContact(contactId: string): Promise<ApiMess
     .eq("contact_id", contactId)
     .order("created_at", { ascending: true });
 
+  if (!byContactId.error && (byContactId.data?.length ?? 0) > 0) {
+    return (byContactId.data || []).map((row) =>
+      normalizeMessageRow(row as Record<string, unknown>)
+    );
+  }
+
+  if (byContactId.error && !isColumnError(byContactId.error)) {
+    throw byContactId.error;
+  }
+
+  for (const phone of phones) {
+    const byPhone = await db
+      .from("artipilot_messages")
+      .select("*")
+      .eq("contact_phone", phone)
+      .order("created_at", { ascending: true });
+
+    if (!byPhone.error && (byPhone.data?.length ?? 0) > 0) {
+      return (byPhone.data || []).map((row) =>
+        normalizeMessageRow(row as Record<string, unknown>)
+      );
+    }
+
+    if (byPhone.error && !isColumnError(byPhone.error)) {
+      throw byPhone.error;
+    }
+  }
+
   if (!byContactId.error) {
     return (byContactId.data || []).map((row) =>
       normalizeMessageRow(row as Record<string, unknown>)
     );
   }
 
-  if (!isColumnError(byContactId.error)) {
-    throw byContactId.error;
-  }
-
-  const byPhone = await db
-    .from("artipilot_messages")
-    .select("*")
-    .eq("contact_phone", phone)
-    .order("created_at", { ascending: true });
-
-  if (byPhone.error) throw byPhone.error;
-
-  return (byPhone.data || []).map((row) =>
-    normalizeMessageRow(row as Record<string, unknown>)
-  );
+  return [];
 }
 
 export async function markContactRead(contactId: string) {

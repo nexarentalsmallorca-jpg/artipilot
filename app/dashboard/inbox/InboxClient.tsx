@@ -4,32 +4,23 @@ import { useCallback, useEffect, useState } from "react";
 import ChatList, { type Contact } from "@/components/inbox/ChatList";
 import ChatWindow, { type Message } from "@/components/inbox/ChatWindow";
 import MessageComposer from "@/components/inbox/MessageComposer";
+import {
+  fetchContactsAction,
+  fetchMessagesAction,
+  fetchQuickRepliesAction,
+  sendMessageAction,
+  suggestAiAction,
+  toggleAiAction,
+} from "./actions";
 
 type Filter = "all" | "unread" | "ai_on" | "ai_off";
 
-async function privateFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const method = (init?.method || "GET").toUpperCase();
-  const headers = new Headers(init?.headers);
-  if (method !== "GET" && method !== "HEAD" && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-
-  const res = await fetch(url, {
-    ...init,
-    credentials: "include",
-    cache: "no-store",
-    headers,
-  });
-
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error || data.message || `Request failed (${res.status})`);
-  }
-  return data as T;
-}
-
-export default function InboxClient() {
-  const [contacts, setContacts] = useState<Contact[]>([]);
+export default function InboxClient({
+  initialContacts = [],
+}: {
+  initialContacts?: Contact[];
+}) {
+  const [contacts, setContacts] = useState<Contact[]>(initialContacts);
   const [messages, setMessages] = useState<Message[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
@@ -44,45 +35,32 @@ export default function InboxClient() {
   const selected = contacts.find((c) => c.id === selectedId) || null;
 
   const loadContacts = useCallback(async () => {
-    try {
-      const data = await privateFetch<{ contacts: Contact[] }>(
-        "/api/private/contacts"
-      );
-      setContacts(data.contacts || []);
-      setLoadError(null);
-    } catch (e) {
-      setLoadError(e instanceof Error ? e.message : "Failed to load contacts");
+    const result = await fetchContactsAction();
+    if (result.error) {
+      setLoadError(result.error);
+      return;
     }
+    setContacts(result.contacts);
+    setLoadError(null);
   }, []);
 
   const loadQuickReplies = useCallback(async () => {
-    try {
-      const data = await privateFetch<{ items: { id: string; title: string; content: string }[] }>(
-        "/api/private/quick-replies"
-      );
-      setQuickReplies(data.items || []);
-    } catch {
-      setQuickReplies([]);
-    }
+    const result = await fetchQuickRepliesAction();
+    setQuickReplies(result.items);
   }, []);
 
   const loadMessages = useCallback(async (contactId: string) => {
     setLoadingMessages(true);
     setMessageError(null);
-    try {
-      const data = await privateFetch<{ messages: Message[] }>(
-        `/api/private/messages?contact_id=${encodeURIComponent(contactId)}`
-      );
-      setMessages(data.messages || []);
-      await loadContacts();
-    } catch (e) {
+    const result = await fetchMessagesAction(contactId);
+    if (result.error) {
       setMessages([]);
-      setMessageError(
-        e instanceof Error ? e.message : "Failed to load messages"
-      );
-    } finally {
-      setLoadingMessages(false);
+      setMessageError(result.error);
+    } else {
+      setMessages(result.messages);
+      await loadContacts();
     }
+    setLoadingMessages(false);
   }, [loadContacts]);
 
   useEffect(() => {
@@ -104,41 +82,35 @@ export default function InboxClient() {
 
   async function handleSend(body: string) {
     if (!selectedId) return;
-    const data = await privateFetch<{ message: Message; error?: string }>(
-      "/api/private/send",
-      {
-        method: "POST",
-        body: JSON.stringify({ contact_id: selectedId, body }),
-      }
-    );
-    if (data.error) {
-      throw new Error(data.error);
+    const result = await sendMessageAction(selectedId, body);
+    if (result.error) {
+      throw new Error(result.error);
     }
     await loadMessages(selectedId);
   }
 
   async function handleAiSuggest() {
     if (!selectedId) return null;
-    const data = await privateFetch<{ suggestion: string }>(
-      "/api/private/ai-suggest",
-      {
-        method: "POST",
-        body: JSON.stringify({ contact_id: selectedId }),
-      }
-    );
-    return data.suggestion;
+    const result = await suggestAiAction(selectedId);
+    if (result.error) {
+      throw new Error(result.error);
+    }
+    return result.suggestion || null;
   }
 
   async function handleToggleAi() {
     if (!selected) return;
     const next = !selected.ai_enabled;
-    await privateFetch("/api/private/contacts", {
-      method: "PATCH",
-      body: JSON.stringify({ contact_id: selected.id, ai_enabled: next }),
-    });
-    setContacts((prev) =>
-      prev.map((c) => (c.id === selected.id ? { ...c, ai_enabled: next } : c))
-    );
+    const result = await toggleAiAction(selected.id, next);
+    if (result.error) {
+      setMessageError(result.error);
+      return;
+    }
+    if (result.contact) {
+      setContacts((prev) =>
+        prev.map((c) => (c.id === selected.id ? { ...c, ...result.contact } : c))
+      );
+    }
   }
 
   return (
