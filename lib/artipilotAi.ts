@@ -1,3 +1,5 @@
+import { buildNexaSystemPrompt } from "@/lib/ai/nexaBrain";
+
 export type ArtipilotChatMessage = {
   role: "customer" | "assistant" | "manual" | "system";
   direction: "inbound" | "outbound";
@@ -401,23 +403,22 @@ function buildInstructions(input: ArtipilotAiInput, knownCustomerName: string) {
     input.businessRules?.trim() ||
     "Be friendly, short, professional, and do not confirm final availability or final prices unless clearly provided by the business.";
 
+  const extraTraining = [
+    input.trainingKnowledge?.trim(),
+    aiJob ? `Workspace AI job:\n${aiJob}` : "",
+    businessRules ? `Workspace business rules:\n${businessRules}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
   return `
-You are Nero, the AI WhatsApp assistant for ${businessName}.
+${buildNexaSystemPrompt(extraTraining)}
 
 BUSINESS CONTEXT:
 Business name: ${businessName}
 Business type: ${businessType}
 Main business language: ${mainLanguage}
 Known customer name: ${knownCustomerName || "not known yet"}
-
-AI JOB FROM THE BUSINESS OWNER:
-${aiJob}
-
-BUSINESS RULES / AI TRAINING BRAIN FROM THE BUSINESS OWNER:
-${businessRules}
-
-ACTIVE TRAINING KNOWLEDGE (private dashboard):
-${input.trainingKnowledge?.trim() || "No extra training knowledge saved yet."}
 
 RULE PRIORITY:
 1. The AI JOB and BUSINESS RULES above are the highest priority.

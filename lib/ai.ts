@@ -1,3 +1,4 @@
+import { buildNexaSystemPrompt } from "@/lib/ai/nexaBrain";
 import { getAiSettings } from "@/lib/db/settings";
 import { getRecentMessagesForAi } from "@/lib/db/messages";
 import type { Message } from "@/lib/db/types";
@@ -49,24 +50,11 @@ export async function generateAiReply(input: {
   const history = await getRecentMessagesForAi(input.contactId, 24);
   const model = process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
 
-  const system = `You are ${settings.ai_name || "Artipilot"}, the WhatsApp assistant for ${settings.business_name || "the business"}.
+  const system = `${buildNexaSystemPrompt(training)}
 
-Tone: ${settings.tone || "Friendly and professional"}
-Main job: ${settings.main_job || ""}
-Business rules: ${settings.business_rules || ""}
-Handoff rules: ${settings.handoff_rules || ""}
-Language: ${settings.language_rule || "Always reply in the same language the customer used in their latest message. If they write in Spanish, reply in Spanish. If they write in English, reply in English. Never switch languages unless the customer does."}
-Booking link: ${settings.booking_link || "(none)"}
+Optional booking link: ${settings.booking_link || "(use NEXA website)"}
 
-Active training knowledge:
-${training || "(none yet)"}
-
-Rules:
-- Be short, friendly, human.
-- Do not invent legal/insurance details.
-- If unsure, say the team will confirm.
-- Guide toward booking politely.
-- Output only the reply text, no labels.`;
+Output only the reply text the customer should receive on WhatsApp. No labels or markdown.`;
 
   const user = `Customer name: ${input.customerName || "Unknown"}
 Recent conversation:

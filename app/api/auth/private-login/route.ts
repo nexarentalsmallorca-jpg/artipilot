@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  applyPrivateSessionCookie,
+  setPrivateSessionCookie,
+} from "@/lib/auth/private-session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const COOKIE_NAME = "artipilot_private_session";
-const COOKIE_VALUE = "authenticated";
 const REDIRECT_STATUS = 303;
 
 function redirectToLogin(request: NextRequest, error?: string) {
@@ -15,8 +17,8 @@ function redirectToLogin(request: NextRequest, error?: string) {
 
 export async function POST(request: NextRequest) {
   const formData = await request.formData();
-  const password = String(formData.get("password") || "");
-  const expected = process.env.DASHBOARD_PASSWORD;
+  const password = String(formData.get("password") || "").trim();
+  const expected = process.env.DASHBOARD_PASSWORD?.trim();
 
   if (!expected) {
     return redirectToLogin(request, "not_configured");
@@ -26,18 +28,14 @@ export async function POST(request: NextRequest) {
     return redirectToLogin(request, "incorrect");
   }
 
+  await setPrivateSessionCookie(request);
+
   const response = NextResponse.redirect(
     new URL("/dashboard/inbox", request.url),
     REDIRECT_STATUS
   );
 
-  response.cookies.set(COOKIE_NAME, COOKIE_VALUE, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 7,
-  });
+  applyPrivateSessionCookie(response, request);
 
   return response;
 }
