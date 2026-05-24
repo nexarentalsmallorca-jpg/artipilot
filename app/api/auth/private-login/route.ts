@@ -5,12 +5,11 @@ export const dynamic = "force-dynamic";
 
 const COOKIE_NAME = "artipilot_private_session";
 const COOKIE_VALUE = "authenticated";
-const REDIRECT_STATUS = 303;
 
 function redirectToLogin(request: NextRequest, error?: string) {
   const url = new URL("/login", request.url);
   if (error) url.searchParams.set("error", error);
-  return NextResponse.redirect(url, REDIRECT_STATUS);
+  return NextResponse.redirect(url, 303);
 }
 
 export async function POST(request: NextRequest) {
@@ -28,7 +27,7 @@ export async function POST(request: NextRequest) {
 
   const response = NextResponse.redirect(
     new URL("/dashboard/inbox", request.url),
-    REDIRECT_STATUS
+    303
   );
 
   response.cookies.set(COOKIE_NAME, COOKIE_VALUE, {
@@ -40,4 +39,8 @@ export async function POST(request: NextRequest) {
   });
 
   return response;
+}
+
+export async function GET(request: NextRequest) {
+  return redirectToLogin(request);
 }
