@@ -1,12 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateAiReply, isOpenAiConfigured } from "@/lib/ai/generateReply";
-import {
-  getContactById,
-  insertInboundMessage,
-  insertOutboundMessage,
-  listMessagesForContact,
-  updateOutboundMessage,
-} from "@/lib/db/private-inbox";
 import { getSupabaseAdmin, isSupabaseConfigured } from "@/lib/supabase/admin";
 import { normalizePhone, sendWhatsAppText } from "@/lib/whatsapp/send";
 
@@ -44,6 +37,33 @@ type WebhookBody = {
   }[];
 };
 
+type ArtipilotContact = {
+  id: string;
+  phone: string;
+  name?: string | null;
+  profile_name?: string | null;
+  ai_enabled?: boolean | null;
+};
+
+type ArtipilotMessage = {
+  id: string;
+  contact_phone: string;
+  role?: string | null;
+  direction?: string | null;
+  message_type?: string | null;
+  content?: string | null;
+  whatsapp_message_id?: string | null;
+  created_at?: string | null;
+};
+
+function logDebug(label: string, data?: unknown) {
+  console.log(`[NERO_WEBHOOK] ${label}`, data ?? "");
+}
+
+function logError(label: string, error: unknown) {
+  console.error(`[NERO_WEBHOOK_ERROR] ${label}`, error);
+}
+
 function getVerifyToken() {
   return process.env.WHATSAPP_VERIFY_TOKEN?.trim() || "";
 }
@@ -66,8 +86,12 @@ function waTimestamp(timestamp?: string) {
   return new Date(seconds * 1000).toISOString();
 }
 
+function getWebhookValue(body: WebhookBody) {
+  return body.entry?.[0]?.changes?.[0]?.value || null;
+}
+
 function messageBody(message: WaMessage) {
-  if (message.type === "text" && message.text?.body) {
+  if (message.type === "text" && message.text?.body?.trim()) {
     return message.text.body.trim();
   }
 
@@ -76,10 +100,6 @@ function messageBody(message: WaMessage) {
 
 function isRealTextMessage(message: WaMessage) {
   return message.type === "text" && Boolean(message.text?.body?.trim());
-}
-
-function getWebhookValue(body: WebhookBody) {
-  return body.entry?.[0]?.changes?.[0]?.value || null;
 }
 
 async function messageAlreadyExists(whatsappMessageId?: string) {
@@ -96,7 +116,7 @@ async function messageAlreadyExists(whatsappMessageId?: string) {
     .maybeSingle();
 
   if (error) {
-    console.error("messageAlreadyExists error:", error);
+    logError("messageAlreadyExists failed", error);
     return false;
   }
 
@@ -108,13 +128,19 @@ async function upsertContact(phone: string, profileName?: string | null) {
   const normalizedPhone = normalizePhone(phone);
   const cleanProfileName = safeString(profileName);
 
+  logDebug("Upserting contact", {
+    phone: normalizedPhone,
+    profileName: cleanProfileName || null,
+  });
+
   const { data: existing, error: existingError } = await db
     .from("artipilot_contacts")
-    .select("id, name, profile_name")
+    .select("id, phone, name, profile_name, ai_enabled")
     .eq("phone", normalizedPhone)
-    .maybeSingle();
+    .maybeSingle<ArtipilotContact>();
 
   if (existingError) {
+    logError("Contact lookup failed", existingError);
     throw existingError;
   }
 
@@ -131,9 +157,17 @@ async function upsertContact(phone: string, profileName?: string | null) {
       updates.name = cleanProfileName;
     }
 
-    await db.from("artipilot_contacts").update(updates).eq("id", existing.id);
+    const { error: updateError } = await db
+      .from("artipilot_contacts")
+      .update(updates)
+      .eq("id", existing.id);
 
-    return String(existing.id);
+    if (updateError) {
+      logError("Contact update failed", updateError);
+      throw updateError;
+    }
+
+    return existing;
   }
 
   const { data: created, error: createError } = await db
@@ -147,14 +181,137 @@ async function upsertContact(phone: string, profileName?: string | null) {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
-    .select("id")
-    .single();
+    .select("id, phone, name, profile_name, ai_enabled")
+    .single<ArtipilotContact>();
 
   if (createError) {
+    logError("Contact create failed", createError);
     throw createError;
   }
 
-  return String(created.id);
+  return created;
+}
+
+async function insertInboundMessage(params: {
+  phone: string;
+  whatsappMessageId?: string;
+  content: string;
+  messageType: string;
+  createdAt: string;
+}) {
+  const db = getSupabaseAdmin();
+
+  logDebug("Saving inbound message", {
+    phone: params.phone,
+    whatsappMessageId: params.whatsappMessageId || null,
+    messageType: params.messageType,
+  });
+
+  const { data, error } = await db
+    .from("artipilot_messages")
+    .insert({
+      contact_phone: params.phone,
+      whatsapp_message_id: params.whatsappMessageId || null,
+      role: "user",
+      direction: "inbound",
+      message_type: params.messageType || "text",
+      content: params.content,
+      delivery_status: "received",
+      created_at: params.createdAt,
+      updated_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    logError("Inbound message insert failed", error);
+    throw error;
+  }
+
+  return data;
+}
+
+async function insertOutboundAiMessage(params: {
+  phone: string;
+  content: string;
+  status: "pending" | "sent" | "failed";
+  whatsappMessageId?: string | null;
+  statusError?: string | null;
+}) {
+  const db = getSupabaseAdmin();
+
+  logDebug("Saving outbound AI message", {
+    phone: params.phone,
+    status: params.status,
+    whatsappMessageId: params.whatsappMessageId || null,
+  });
+
+  const { data, error } = await db
+    .from("artipilot_messages")
+    .insert({
+      contact_phone: params.phone,
+      whatsapp_message_id: params.whatsappMessageId || null,
+      role: "assistant",
+      direction: "outbound",
+      message_type: "text",
+      content: params.content,
+      delivery_status: params.status,
+      status_error: params.statusError || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    logError("Outbound AI message insert failed", error);
+    throw error;
+  }
+
+  return data;
+}
+
+async function updateMessageStatus(params: {
+  messageId: string;
+  status: string;
+  statusError?: string | null;
+  whatsappMessageId?: string | null;
+}) {
+  const db = getSupabaseAdmin();
+
+  const { error } = await db
+    .from("artipilot_messages")
+    .update({
+      delivery_status: params.status,
+      status_error: params.statusError || null,
+      whatsapp_message_id: params.whatsappMessageId || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", params.messageId);
+
+  if (error) {
+    logError("Message status update failed", error);
+  }
+}
+
+async function listRecentMessagesForPhone(phone: string) {
+  const db = getSupabaseAdmin();
+  const normalizedPhone = normalizePhone(phone);
+
+  const { data, error } = await db
+    .from("artipilot_messages")
+    .select("id, contact_phone, role, direction, message_type, content, whatsapp_message_id, created_at")
+    .eq("contact_phone", normalizedPhone)
+    .order("created_at", { ascending: true })
+    .limit(30)
+    .returns<ArtipilotMessage[]>();
+
+  if (error) {
+    logError("Recent messages lookup failed", error);
+    return [];
+  }
+
+  return data || [];
 }
 
 async function handleStatusUpdate(status: WaStatus) {
@@ -167,92 +324,134 @@ async function handleStatusUpdate(status: WaStatus) {
 
   const db = getSupabaseAdmin();
 
-  const modern = await db
+  logDebug("Handling WhatsApp status update", {
+    whatsappMessageId,
+    deliveryStatus,
+  });
+
+  const { error } = await db
     .from("artipilot_messages")
     .update({
-      status: deliveryStatus,
+      delivery_status: deliveryStatus,
       updated_at: new Date().toISOString(),
     })
     .eq("whatsapp_message_id", whatsappMessageId);
 
-  if (modern.error) {
-    console.error("Status update error:", modern.error);
-
-    await db
-      .from("artipilot_messages")
-      .update({
-        delivery_status: deliveryStatus,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("whatsapp_message_id", whatsappMessageId);
+  if (error) {
+    logError("Status update failed", error);
   }
 }
 
 async function maybeAutoReply(params: {
-  contactId: string;
+  contact: ArtipilotContact;
   phone: string;
   inboundBody: string;
 }) {
-  const contact = await getContactById(params.contactId);
+  const phone = normalizePhone(params.phone);
+  const inboundBody = safeString(params.inboundBody);
 
-  if (!contact?.id) {
+  logDebug("Auto reply check started", {
+    phone,
+    contactId: params.contact.id,
+    aiEnabled: params.contact.ai_enabled,
+    inboundBody,
+  });
+
+  if (!params.contact?.id) {
+    logDebug("Auto reply skipped: contact missing");
     return;
   }
 
-  if (!contact.ai_enabled) {
+  if (params.contact.ai_enabled === false) {
+    logDebug("Auto reply skipped: AI disabled for contact", { phone });
+    return;
+  }
+
+  if (!inboundBody) {
+    logDebug("Auto reply skipped: empty inbound body");
     return;
   }
 
   if (!isOpenAiConfigured()) {
-    console.warn("Auto reply skipped: OpenAI is not configured.");
+    logError("Auto reply skipped: OpenAI is not configured", {
+      hasApiKey: Boolean(process.env.OPENAI_API_KEY),
+    });
     return;
   }
 
-  const recentMessages = await listMessagesForContact(params.contactId);
+  const recentMessages = await listRecentMessagesForPhone(phone);
 
   const history = recentMessages
-    .filter((message) => message.body)
+    .filter((message) => safeString(message.content))
     .slice(-20)
     .map((message) => ({
       role:
         message.direction === "inbound"
           ? ("user" as const)
           : ("assistant" as const),
-      content: String(message.body || ""),
+      content: safeString(message.content),
     }));
+
+  logDebug("Generating Nero reply", {
+    phone,
+    historyCount: history.length,
+  });
 
   let replyText = "";
 
   try {
     replyText = await generateAiReply({
-      customerMessage: params.inboundBody,
+      customerMessage: inboundBody,
       recentMessages: history,
     });
   } catch (error) {
-    console.error("Nero AI reply generation failed:", error);
+    logError("Nero AI generation failed", error);
     return;
   }
 
   replyText = safeString(replyText);
 
   if (!replyText) {
+    logError("Nero AI returned empty reply", { phone });
     return;
   }
 
-  const pendingMessage = await insertOutboundMessage({
-    contactId: params.contactId,
-    phone: params.phone,
-    body: replyText,
-    senderType: "ai",
+  const pendingMessage = await insertOutboundAiMessage({
+    phone,
+    content: replyText,
     status: "pending",
   });
 
-  const sendResult = await sendWhatsAppText(params.phone, replyText);
+  logDebug("Sending Nero reply through WhatsApp", {
+    phone,
+    messageId: pendingMessage.id,
+  });
 
-  await updateOutboundMessage(pendingMessage.id, {
-    status: sendResult.ok ? "sent" : "failed",
-    status_error: sendResult.ok ? null : sendResult.error,
-    whatsapp_message_id: sendResult.ok ? sendResult.messageId : null,
+  const sendResult = await sendWhatsAppText(phone, replyText);
+
+  if (!sendResult.ok) {
+    logError("WhatsApp send failed for Nero reply", sendResult.error);
+
+    await updateMessageStatus({
+      messageId: pendingMessage.id,
+      status: "failed",
+      statusError: sendResult.error || "Unknown WhatsApp send error",
+      whatsappMessageId: null,
+    });
+
+    return;
+  }
+
+  await updateMessageStatus({
+    messageId: pendingMessage.id,
+    status: "sent",
+    statusError: null,
+    whatsappMessageId: sendResult.messageId || null,
+  });
+
+  logDebug("Nero auto reply sent successfully", {
+    phone,
+    whatsappMessageId: sendResult.messageId || null,
   });
 }
 
@@ -289,13 +488,15 @@ export async function POST(request: NextRequest) {
 
   try {
     body = await request.json();
-  } catch {
+  } catch (error) {
+    logError("Invalid webhook JSON", error);
     return NextResponse.json({ error: "Invalid JSON." }, { status: 400 });
   }
 
   const value = getWebhookValue(body);
 
   if (!value) {
+    logDebug("Webhook received without value");
     return NextResponse.json({ ok: true });
   }
 
@@ -311,7 +512,7 @@ export async function POST(request: NextRequest) {
     try {
       await handleStatusUpdate(status);
     } catch (error) {
-      console.error("Webhook status update error:", error);
+      logError("Webhook status handling failed", error);
     }
   }
 
@@ -319,6 +520,7 @@ export async function POST(request: NextRequest) {
     const from = safeString(message.from);
 
     if (!from) {
+      logDebug("Skipped message: missing from");
       continue;
     }
 
@@ -327,34 +529,48 @@ export async function POST(request: NextRequest) {
     const text = messageBody(message);
     const createdAt = waTimestamp(message.timestamp);
     const whatsappMessageId = safeString(message.id);
+    const messageType = safeString(message.type) || "text";
+
+    logDebug("Incoming WhatsApp message received", {
+      phone,
+      whatsappMessageId,
+      messageType,
+      isText: isRealTextMessage(message),
+    });
 
     try {
       const duplicate = await messageAlreadyExists(whatsappMessageId);
 
       if (duplicate) {
+        logDebug("Skipped duplicate WhatsApp message", {
+          whatsappMessageId,
+        });
         continue;
       }
 
-      const contactId = await upsertContact(phone, profileName);
+      const contact = await upsertContact(phone, profileName);
 
       await insertInboundMessage({
-        contactId,
         phone,
-        waMessageId: whatsappMessageId || undefined,
-        body: text,
+        whatsappMessageId: whatsappMessageId || undefined,
+        content: text,
+        messageType,
         createdAt,
-        raw: message,
       });
 
       if (isRealTextMessage(message)) {
         await maybeAutoReply({
-          contactId,
+          contact,
           phone,
           inboundBody: message.text?.body?.trim() || "",
         });
+      } else {
+        logDebug("Auto reply skipped: not a real text message yet", {
+          messageType,
+        });
       }
     } catch (error) {
-      console.error("Webhook message error:", error);
+      logError("Webhook message handling failed", error);
     }
   }
 
