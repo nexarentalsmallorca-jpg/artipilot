@@ -90,6 +90,59 @@ function mapSenderTypeToRole(senderType: string) {
   return "customer";
 }
 
+function getMessageContent(row: Record<string, unknown>) {
+  return (
+    (row.content as string) ??
+    (row.body as string) ??
+    (row.message as string) ??
+    null
+  );
+}
+
+function getMessageStatus(
+  row: Record<string, unknown>,
+  direction: ApiMessage["direction"]
+) {
+  return (
+    (row.delivery_status as string) ??
+    (row.status as string) ??
+    (direction === "inbound" ? "received" : "sent")
+  );
+}
+
+function getMessageCreatedAt(row: Record<string, unknown>) {
+  return String(row.created_at || new Date().toISOString());
+}
+
+function sortMessageRows(rows: Record<string, unknown>[]) {
+  return [...rows].sort((a, b) => {
+    const first = new Date(getMessageCreatedAt(a)).getTime();
+    const second = new Date(getMessageCreatedAt(b)).getTime();
+
+    if (Number.isNaN(first) || Number.isNaN(second)) {
+      return 0;
+    }
+
+    return first - second;
+  });
+}
+
+function uniqueRowsById(rows: Record<string, unknown>[]) {
+  const map = new Map<string, Record<string, unknown>>();
+
+  for (const row of rows) {
+    const id = String(row.id || "");
+
+    if (!id) {
+      continue;
+    }
+
+    map.set(id, row);
+  }
+
+  return Array.from(map.values());
+}
+
 export function normalizeContactRow(row: Record<string, unknown>): ApiContact {
   return {
     id: String(row.id),
@@ -106,39 +159,33 @@ export function normalizeContactRow(row: Record<string, unknown>): ApiContact {
 export function normalizeMessageRow(row: Record<string, unknown>): ApiMessage {
   const direction = normalizeDirection(row.direction);
 
-  const body =
-    (row.content as string) ??
-    (row.body as string) ??
-    (row.message as string) ??
-    null;
-
-  const status =
-    (row.delivery_status as string) ??
-    (row.status as string) ??
-    (direction === "inbound" ? "received" : "sent");
-
   return {
     id: String(row.id),
     direction,
     sender_type:
       (row.sender_type as ApiMessage["sender_type"]) ||
       mapRoleToSenderType(row.role as string, direction),
-    body,
-    status,
-    created_at: String(row.created_at || new Date().toISOString()),
+    body: getMessageContent(row),
+    status: getMessageStatus(row, direction),
+    created_at: getMessageCreatedAt(row),
   };
 }
 
 function phoneLookupVariants(phone: string) {
+  const original = cleanString(phone);
   const digits = normalizePhone(phone);
   const variants = new Set<string>();
+
+  if (original) {
+    variants.add(original);
+  }
 
   if (digits) {
     variants.add(digits);
     variants.add(`+${digits}`);
   }
 
-  if (digits.startsWith("34")) {
+  if (digits.startsWith("34") && digits.length > 9) {
     variants.add(digits.slice(2));
     variants.add(`+${digits.slice(2)}`);
   }
@@ -267,6 +314,8 @@ export async function listMessagesForContact(
   const contact = await getContactById(contactId);
   const phones = phoneLookupVariants(contact.phone);
 
+  const allRows: Record<string, unknown>[] = [];
+
   for (const phone of phones) {
     const byContactPhone = await db
       .from("artipilot_messages")
@@ -275,14 +324,35 @@ export async function listMessagesForContact(
       .order("created_at", { ascending: true });
 
     if (!byContactPhone.error) {
-      return (byContactPhone.data || []).map((row) =>
-        normalizeMessageRow(row as Record<string, unknown>)
-      );
+      allRows.push(...((byContactPhone.data || []) as Record<string, unknown>[]));
+      continue;
     }
 
     if (!isSchemaError(byContactPhone.error)) {
       throw byContactPhone.error;
     }
+  }
+
+  if (allRows.length > 0) {
+    return sortMessageRows(uniqueRowsById(allRows)).map((row) =>
+      normalizeMessageRow(row)
+    );
+  }
+
+  const legacyByContactId = await db
+    .from("artipilot_messages")
+    .select("*")
+    .eq("contact_id", contactId)
+    .order("created_at", { ascending: true });
+
+  if (!legacyByContactId.error) {
+    return ((legacyByContactId.data || []) as Record<string, unknown>[]).map(
+      (row) => normalizeMessageRow(row)
+    );
+  }
+
+  if (!isSchemaError(legacyByContactId.error)) {
+    throw legacyByContactId.error;
   }
 
   return [];
@@ -369,6 +439,7 @@ export async function insertOutboundMessage(params: {
     message_type: senderType === "system" ? "system" : "text",
     content: params.body,
     delivery_status: status,
+    status_error: params.statusError ?? null,
     created_at: now,
     updated_at: now,
   };
@@ -388,6 +459,7 @@ export async function insertOutboundMessage(params: {
     role: mapSenderTypeToRole(senderType),
     direction: "outbound",
     content: params.body,
+    created_at: now,
   };
 
   return insertMessageWithFallback(db, [
@@ -410,6 +482,10 @@ export async function updateOutboundMessage(
 
   if (updates.status) {
     fullUpdates.delivery_status = updates.status;
+  }
+
+  if (updates.status_error) {
+    fullUpdates.status_error = updates.status_error;
   }
 
   if (updates.whatsapp_message_id) {
@@ -531,6 +607,7 @@ export async function insertInboundMessage(params: {
       updated_at: now,
     },
     {
+      last_message: params.body,
       last_message_at: createdAt,
       unread_count: unreadCount,
     }
@@ -552,6 +629,7 @@ export async function touchContactLastMessage(contactId: string, text: string) {
       updated_at: now,
     },
     {
+      last_message: text,
       last_message_at: now,
     }
   );
