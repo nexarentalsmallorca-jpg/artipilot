@@ -28,13 +28,18 @@ function normalizeQuickReply(row: QuickReplyRow) {
   };
 }
 
-function isMissingTableOrColumn(error: unknown) {
-  const text = String(
+function getErrorText(error: unknown) {
+  return String(
     (error as { message?: string })?.message ||
       (error as { details?: string })?.details ||
       (error as { hint?: string })?.hint ||
+      error ||
       ""
-  ).toLowerCase();
+  );
+}
+
+function isMissingTableOrColumn(error: unknown) {
+  const text = getErrorText(error).toLowerCase();
 
   return (
     text.includes("does not exist") ||
@@ -43,6 +48,16 @@ function isMissingTableOrColumn(error: unknown) {
     text.includes("relation") ||
     text.includes("column")
   );
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  const text = getErrorText(error);
+
+  return text || fallback;
 }
 
 async function selectQuickRepliesFromTable(tableName: string) {
@@ -80,9 +95,25 @@ async function selectQuickRepliesFromTable(tableName: string) {
     };
   }
 
+  if (!isMissingTableOrColumn(simpleQuery.error)) {
+    return {
+      data: [],
+      error: simpleQuery.error,
+    };
+  }
+
+  const minimalQuery = await db.from(tableName).select("id,title,content");
+
+  if (!minimalQuery.error) {
+    return {
+      data: minimalQuery.data || [],
+      error: null,
+    };
+  }
+
   return {
     data: [],
-    error: simpleQuery.error,
+    error: minimalQuery.error,
   };
 }
 
@@ -114,44 +145,47 @@ async function insertQuickReplyIntoTable(
   const db = getSupabaseAdmin();
   const now = new Date().toISOString();
 
-  const fullPayload = {
-    title,
-    content,
-    active: true,
-    created_at: now,
-    updated_at: now,
-  };
+  const payloads: Record<string, unknown>[] = [
+    {
+      title,
+      content,
+      active: true,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      title,
+      content,
+      active: true,
+      created_at: now,
+    },
+    {
+      title,
+      content,
+    },
+  ];
 
-  const simplePayload = {
-    title,
-    content,
-  };
+  let lastError: unknown = null;
 
-  const fullInsert = await db
-    .from(tableName)
-    .insert(fullPayload)
-    .select("id,title,content,active,created_at")
-    .single();
+  for (const payload of payloads) {
+    const insert = await db
+      .from(tableName)
+      .insert(payload)
+      .select("id,title,content,active,created_at")
+      .single();
 
-  if (!fullInsert.error && fullInsert.data) {
-    return fullInsert.data;
+    if (!insert.error && insert.data) {
+      return insert.data;
+    }
+
+    lastError = insert.error;
+
+    if (!isMissingTableOrColumn(insert.error)) {
+      throw insert.error;
+    }
   }
 
-  if (!isMissingTableOrColumn(fullInsert.error)) {
-    throw fullInsert.error;
-  }
-
-  const simpleInsert = await db
-    .from(tableName)
-    .insert(simplePayload)
-    .select("id,title,content")
-    .single();
-
-  if (!simpleInsert.error && simpleInsert.data) {
-    return simpleInsert.data;
-  }
-
-  throw simpleInsert.error;
+  throw lastError;
 }
 
 async function insertQuickReply(title: string, content: string) {
@@ -184,20 +218,17 @@ export async function GET(request: NextRequest) {
     const rows = await loadQuickReplies();
 
     return NextResponse.json({
-      items: (rows || []).map((row) =>
-        normalizeQuickReply(row as QuickReplyRow)
-      ),
+      items: (rows || [])
+        .map((row) => normalizeQuickReply(row as QuickReplyRow))
+        .filter((item) => item.content),
     });
   } catch (error) {
-    console.error("Quick replies GET error:", error);
+    console.error("[ARTIPILOT_QUICK_REPLIES_GET]", error);
 
     return NextResponse.json(
       {
         items: [],
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to load quick replies.",
+        error: getErrorMessage(error, "Failed to load quick replies."),
       },
       { status: 500 }
     );
@@ -246,14 +277,11 @@ export async function POST(request: NextRequest) {
       item: normalizeQuickReply(row as QuickReplyRow),
     });
   } catch (error) {
-    console.error("Quick replies POST error:", error);
+    console.error("[ARTIPILOT_QUICK_REPLIES_POST]", error);
 
     return NextResponse.json(
       {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to add quick reply.",
+        error: getErrorMessage(error, "Failed to add quick reply."),
       },
       { status: 500 }
     );

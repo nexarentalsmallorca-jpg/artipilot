@@ -2,53 +2,46 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://artipilot.com"),
+  metadataBase: new URL("https://private.artipilot.com"),
   title: {
-    default: "Artipilot | AI Daily Life Assistant",
-    template: "%s | Artipilot",
+    default: "Artipilot Private | NEXA WhatsApp Inbox",
+    template: "%s | Artipilot Private",
   },
   description:
-    "Capture anything. Organize everything. Act on what matters. Artipilot turns screenshots, notes, ideas, reminders, goals, links, products, places, and tasks into clear action cards.",
-  applicationName: "Artipilot",
-  keywords: [
-    "Artipilot",
-    "AI daily life assistant",
-    "AI productivity app",
-    "action inbox",
-    "AI reminders",
-    "AI notes organizer",
-    "personal AI assistant",
-    "PWA assistant",
-  ],
+    "Private NEXA Rentals WhatsApp AI inbox for managing customer messages, AI replies, and bookings.",
+  applicationName: "Artipilot Private",
   authors: [{ name: "Artipilot" }],
   creator: "Artipilot",
   publisher: "Artipilot",
   robots: {
-    index: true,
-    follow: true,
+    index: false,
+    follow: false,
+    googleBot: {
+      index: false,
+      follow: false,
+    },
   },
   openGraph: {
-    title: "Artipilot | AI Daily Life Assistant",
-    description:
-      "Turn screenshots, notes, ideas, reminders, and goals into clear actions.",
-    url: "https://artipilot.com",
-    siteName: "Artipilot",
+    title: "Artipilot Private | NEXA WhatsApp Inbox",
+    description: "Private NEXA Rentals WhatsApp AI inbox.",
+    url: "https://private.artipilot.com",
+    siteName: "Artipilot Private",
     type: "website",
     locale: "en_US",
   },
   twitter: {
-    card: "summary_large_image",
-    title: "Artipilot | AI Daily Life Assistant",
-    description:
-      "Capture anything. Organize everything. Act on what matters.",
+    card: "summary",
+    title: "Artipilot Private | NEXA WhatsApp Inbox",
+    description: "Private NEXA Rentals WhatsApp AI inbox.",
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#05070f",
+  themeColor: "#f0f2f5",
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({

@@ -13,6 +13,20 @@ export type ApiContact = {
   unread_count: number;
 };
 
+export type ApiMessageType =
+  | "text"
+  | "image"
+  | "video"
+  | "document"
+  | "audio"
+  | "sticker"
+  | "location"
+  | "contacts"
+  | "interactive"
+  | "button"
+  | "system"
+  | "unknown";
+
 export type ApiMessage = {
   id: string;
   direction: "inbound" | "outbound";
@@ -20,6 +34,9 @@ export type ApiMessage = {
   body: string | null;
   status: string | null;
   created_at: string;
+  message_type: ApiMessageType;
+  media_id: string | null;
+  media_url: string | null;
 };
 
 function cleanString(value: unknown) {
@@ -45,6 +62,28 @@ function isSchemaError(error: unknown) {
 
 function normalizeDirection(value: unknown): ApiMessage["direction"] {
   return value === "outbound" ? "outbound" : "inbound";
+}
+
+function normalizeMessageType(value: unknown): ApiMessageType {
+  const clean = cleanString(value).toLowerCase();
+
+  if (
+    clean === "text" ||
+    clean === "image" ||
+    clean === "video" ||
+    clean === "document" ||
+    clean === "audio" ||
+    clean === "sticker" ||
+    clean === "location" ||
+    clean === "contacts" ||
+    clean === "interactive" ||
+    clean === "button" ||
+    clean === "system"
+  ) {
+    return clean;
+  }
+
+  return clean ? "unknown" : "text";
 }
 
 function mapRoleToSenderType(
@@ -114,6 +153,53 @@ function getMessageCreatedAt(row: Record<string, unknown>) {
   return String(row.created_at || new Date().toISOString());
 }
 
+function getMediaId(row: Record<string, unknown>) {
+  return (
+    (row.media_id as string) ??
+    (row.whatsapp_media_id as string) ??
+    null
+  );
+}
+
+function getMediaUrl(row: Record<string, unknown>) {
+  return (
+    (row.media_url as string) ??
+    (row.file_url as string) ??
+    (row.attachment_url as string) ??
+    null
+  );
+}
+
+function getMediaPreview(messageType: ApiMessageType, body?: string | null) {
+  const cleanBody = cleanString(body);
+
+  if (cleanBody) {
+    return cleanBody;
+  }
+
+  if (messageType === "image") {
+    return "📷 Image";
+  }
+
+  if (messageType === "video") {
+    return "🎥 Video";
+  }
+
+  if (messageType === "document") {
+    return "📄 Document";
+  }
+
+  if (messageType === "audio") {
+    return "🎧 Audio";
+  }
+
+  if (messageType === "sticker") {
+    return "🏷️ Sticker";
+  }
+
+  return "New message";
+}
+
 function sortMessageRows(rows: Record<string, unknown>[]) {
   return [...rows].sort((a, b) => {
     const first = new Date(getMessageCreatedAt(a)).getTime();
@@ -158,6 +244,7 @@ export function normalizeContactRow(row: Record<string, unknown>): ApiContact {
 
 export function normalizeMessageRow(row: Record<string, unknown>): ApiMessage {
   const direction = normalizeDirection(row.direction);
+  const messageType = normalizeMessageType(row.message_type);
 
   return {
     id: String(row.id),
@@ -168,6 +255,9 @@ export function normalizeMessageRow(row: Record<string, unknown>): ApiMessage {
     body: getMessageContent(row),
     status: getMessageStatus(row, direction),
     created_at: getMessageCreatedAt(row),
+    message_type: messageType,
+    media_id: getMediaId(row),
+    media_url: getMediaUrl(row),
   };
 }
 
@@ -324,7 +414,9 @@ export async function listMessagesForContact(
       .order("created_at", { ascending: true });
 
     if (!byContactPhone.error) {
-      allRows.push(...((byContactPhone.data || []) as Record<string, unknown>[]));
+      allRows.push(
+        ...((byContactPhone.data || []) as Record<string, unknown>[])
+      );
       continue;
     }
 
@@ -424,22 +516,36 @@ export async function insertOutboundMessage(params: {
   status?: string;
   whatsappMessageId?: string | null;
   statusError?: string | null;
+  deliveryError?: string | null;
+  messageType?: ApiMessageType;
+  mediaId?: string | null;
+  mediaUrl?: string | null;
+  raw?: unknown;
 }) {
   const db = getSupabaseAdmin();
   const phone = normalizePhone(params.phone);
   const senderType = params.senderType || "admin";
   const status = params.status || "sent";
+  const messageType =
+    params.messageType || (senderType === "system" ? "system" : "text");
   const now = new Date().toISOString();
+
+  const errorText = params.statusError ?? params.deliveryError ?? null;
 
   const fullPayload = {
     contact_phone: phone,
     whatsapp_message_id: params.whatsappMessageId ?? null,
     role: mapSenderTypeToRole(senderType),
+    sender_type: senderType,
     direction: "outbound",
-    message_type: senderType === "system" ? "system" : "text",
+    message_type: messageType,
     content: params.body,
+    media_id: params.mediaId ?? null,
+    media_url: params.mediaUrl ?? null,
     delivery_status: status,
-    status_error: params.statusError ?? null,
+    status_error: errorText,
+    delivery_error: errorText,
+    raw_payload: params.raw ?? null,
     created_at: now,
     updated_at: now,
   };
@@ -449,13 +555,17 @@ export async function insertOutboundMessage(params: {
     whatsapp_message_id: params.whatsappMessageId ?? null,
     role: mapSenderTypeToRole(senderType),
     direction: "outbound",
-    message_type: "text",
+    message_type: messageType,
     content: params.body,
+    media_id: params.mediaId ?? null,
+    media_url: params.mediaUrl ?? null,
+    delivery_status: status,
     created_at: now,
   };
 
-  const minimalPayload = {
+  const legacyPayload = {
     contact_phone: phone,
+    whatsapp_message_id: params.whatsappMessageId ?? null,
     role: mapSenderTypeToRole(senderType),
     direction: "outbound",
     content: params.body,
@@ -465,7 +575,7 @@ export async function insertOutboundMessage(params: {
   return insertMessageWithFallback(db, [
     fullPayload,
     simplePayload,
-    minimalPayload,
+    legacyPayload,
   ]);
 }
 
@@ -480,20 +590,50 @@ export async function updateOutboundMessage(
     updated_at: now,
   };
 
-  if (updates.status) {
+  if ("status" in updates) {
     fullUpdates.delivery_status = updates.status;
   }
 
-  if (updates.status_error) {
-    fullUpdates.status_error = updates.status_error;
+  if ("delivery_status" in updates) {
+    fullUpdates.delivery_status = updates.delivery_status;
   }
 
-  if (updates.whatsapp_message_id) {
+  if ("status_error" in updates) {
+    fullUpdates.status_error = updates.status_error;
+    fullUpdates.delivery_error = updates.status_error;
+  }
+
+  if ("delivery_error" in updates) {
+    fullUpdates.delivery_error = updates.delivery_error;
+    fullUpdates.status_error = updates.delivery_error;
+  }
+
+  if ("whatsapp_message_id" in updates) {
     fullUpdates.whatsapp_message_id = updates.whatsapp_message_id;
   }
 
-  if (updates.body) {
+  if ("body" in updates) {
     fullUpdates.content = updates.body;
+  }
+
+  if ("content" in updates) {
+    fullUpdates.content = updates.content;
+  }
+
+  if ("message_type" in updates) {
+    fullUpdates.message_type = updates.message_type;
+  }
+
+  if ("media_id" in updates) {
+    fullUpdates.media_id = updates.media_id;
+  }
+
+  if ("media_url" in updates) {
+    fullUpdates.media_url = updates.media_url;
+  }
+
+  if ("raw_payload" in updates) {
+    fullUpdates.raw_payload = updates.raw_payload;
   }
 
   const primary = await db
@@ -513,17 +653,62 @@ export async function updateOutboundMessage(
 
   const simpleUpdates: Record<string, unknown> = {};
 
-  if (updates.whatsapp_message_id) {
-    simpleUpdates.whatsapp_message_id = updates.whatsapp_message_id;
+  if ("delivery_status" in fullUpdates) {
+    simpleUpdates.delivery_status = fullUpdates.delivery_status;
   }
 
-  if (updates.body) {
-    simpleUpdates.content = updates.body;
+  if ("status_error" in fullUpdates) {
+    simpleUpdates.status_error = fullUpdates.status_error;
+  }
+
+  if ("whatsapp_message_id" in fullUpdates) {
+    simpleUpdates.whatsapp_message_id = fullUpdates.whatsapp_message_id;
+  }
+
+  if ("content" in fullUpdates) {
+    simpleUpdates.content = fullUpdates.content;
+  }
+
+  if ("message_type" in fullUpdates) {
+    simpleUpdates.message_type = fullUpdates.message_type;
+  }
+
+  if ("media_id" in fullUpdates) {
+    simpleUpdates.media_id = fullUpdates.media_id;
+  }
+
+  if ("media_url" in fullUpdates) {
+    simpleUpdates.media_url = fullUpdates.media_url;
+  }
+
+  const secondary = await db
+    .from("artipilot_messages")
+    .update(simpleUpdates)
+    .eq("id", messageId)
+    .select("*")
+    .single();
+
+  if (!secondary.error && secondary.data) {
+    return normalizeMessageRow(secondary.data as Record<string, unknown>);
+  }
+
+  if (!isSchemaError(secondary.error)) {
+    throw secondary.error;
+  }
+
+  const legacyUpdates: Record<string, unknown> = {};
+
+  if ("whatsapp_message_id" in fullUpdates) {
+    legacyUpdates.whatsapp_message_id = fullUpdates.whatsapp_message_id;
+  }
+
+  if ("content" in fullUpdates) {
+    legacyUpdates.content = fullUpdates.content;
   }
 
   const fallback = await db
     .from("artipilot_messages")
-    .update(simpleUpdates)
+    .update(legacyUpdates)
     .eq("id", messageId)
     .select("*")
     .single();
@@ -542,19 +727,26 @@ export async function insertInboundMessage(params: {
   waMessageId?: string | null;
   createdAt: string;
   raw?: unknown;
+  messageType?: ApiMessageType;
+  mediaId?: string | null;
+  mediaUrl?: string | null;
 }) {
   const db = getSupabaseAdmin();
   const phone = normalizePhone(params.phone);
   const createdAt = params.createdAt || new Date().toISOString();
   const now = new Date().toISOString();
+  const messageType = params.messageType || "text";
 
   const fullPayload = {
     contact_phone: phone,
     whatsapp_message_id: params.waMessageId || null,
     role: "customer",
+    sender_type: "customer",
     direction: "inbound",
-    message_type: "text",
+    message_type: messageType,
     content: params.body,
+    media_id: params.mediaId ?? null,
+    media_url: params.mediaUrl ?? null,
     delivery_status: "received",
     raw_payload: params.raw ?? null,
     created_at: createdAt,
@@ -566,13 +758,17 @@ export async function insertInboundMessage(params: {
     whatsapp_message_id: params.waMessageId || null,
     role: "customer",
     direction: "inbound",
-    message_type: "text",
+    message_type: messageType,
     content: params.body,
+    media_id: params.mediaId ?? null,
+    media_url: params.mediaUrl ?? null,
+    delivery_status: "received",
     created_at: createdAt,
   };
 
-  const minimalPayload = {
+  const legacyPayload = {
     contact_phone: phone,
+    whatsapp_message_id: params.waMessageId || null,
     role: "customer",
     direction: "inbound",
     content: params.body,
@@ -582,7 +778,7 @@ export async function insertInboundMessage(params: {
   const message = await insertMessageWithFallback(db, [
     fullPayload,
     simplePayload,
-    minimalPayload,
+    legacyPayload,
   ]);
 
   let unreadCount = 1;
@@ -597,17 +793,19 @@ export async function insertInboundMessage(params: {
     unreadCount = Number(contactResult.data.unread_count || 0) + 1;
   }
 
+  const preview = getMediaPreview(messageType, params.body);
+
   await updateContactWithFallback(
     db,
     params.contactId,
     {
-      last_message: params.body,
+      last_message: preview,
       last_message_at: createdAt,
       unread_count: unreadCount,
       updated_at: now,
     },
     {
-      last_message: params.body,
+      last_message: preview,
       last_message_at: createdAt,
       unread_count: unreadCount,
     }

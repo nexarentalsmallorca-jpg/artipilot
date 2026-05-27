@@ -1,7 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateAiReply, isOpenAiConfigured } from "@/lib/ai/generateReply";
+import {
+  insertInboundMessage as saveInboundMessage,
+  insertOutboundMessage,
+  touchContactLastMessage,
+  updateOutboundMessage,
+} from "@/lib/db/private-inbox";
+import { sendPushNotificationToAll } from "@/lib/push/sendPushNotification";
 import { getSupabaseAdmin, isSupabaseConfigured } from "@/lib/supabase/admin";
-import { normalizePhone, sendWhatsAppText } from "@/lib/whatsapp/send";
+import {
+  isWhatsAppConfigured,
+  normalizePhone,
+  sendWhatsAppText,
+} from "@/lib/whatsapp/send";
+
+type WaMediaObject = {
+  id?: string;
+  mime_type?: string;
+  sha256?: string;
+  caption?: string;
+  filename?: string;
+};
+
+type WaLocationObject = {
+  latitude?: number;
+  longitude?: number;
+  name?: string;
+  address?: string;
+};
 
 type WaMessage = {
   from?: string;
@@ -11,6 +37,12 @@ type WaMessage = {
   text?: {
     body?: string;
   };
+  image?: WaMediaObject;
+  video?: WaMediaObject;
+  document?: WaMediaObject;
+  audio?: WaMediaObject;
+  sticker?: WaMediaObject;
+  location?: WaLocationObject;
 };
 
 type WaContact = {
@@ -23,16 +55,27 @@ type WaContact = {
 type WaStatus = {
   id?: string;
   status?: string;
+  timestamp?: string;
+  errors?: {
+    code?: number;
+    title?: string;
+    message?: string;
+    error_data?: {
+      details?: string;
+    };
+  }[];
+};
+
+type WaChangeValue = {
+  messages?: WaMessage[];
+  contacts?: WaContact[];
+  statuses?: WaStatus[];
 };
 
 type WebhookBody = {
   entry?: {
     changes?: {
-      value?: {
-        messages?: WaMessage[];
-        contacts?: WaContact[];
-        statuses?: WaStatus[];
-      };
+      value?: WaChangeValue;
     }[];
   }[];
 };
@@ -43,18 +86,35 @@ type ArtipilotContact = {
   name?: string | null;
   profile_name?: string | null;
   ai_enabled?: boolean | null;
+  unread_count?: number | null;
 };
 
 type ArtipilotMessage = {
   id: string;
   contact_phone: string;
   role?: string | null;
+  sender_type?: string | null;
   direction?: string | null;
   message_type?: string | null;
   content?: string | null;
   whatsapp_message_id?: string | null;
+  delivery_status?: string | null;
+  status_error?: string | null;
   created_at?: string | null;
 };
+
+type InboundMessageType =
+  | "text"
+  | "image"
+  | "video"
+  | "document"
+  | "audio"
+  | "sticker"
+  | "location"
+  | "contacts"
+  | "interactive"
+  | "button"
+  | "unknown";
 
 function logDebug(label: string, data?: unknown) {
   console.log(`[NERO_WEBHOOK] ${label}`, data ?? "");
@@ -86,20 +146,255 @@ function waTimestamp(timestamp?: string) {
   return new Date(seconds * 1000).toISOString();
 }
 
-function getWebhookValue(body: WebhookBody) {
-  return body.entry?.[0]?.changes?.[0]?.value || null;
+function getWebhookValues(body: WebhookBody) {
+  const values: WaChangeValue[] = [];
+
+  for (const entry of body.entry || []) {
+    for (const change of entry.changes || []) {
+      if (change.value) {
+        values.push(change.value);
+      }
+    }
+  }
+
+  return values;
 }
 
-function messageBody(message: WaMessage) {
+function isRealTextMessage(message: WaMessage) {
+  return message.type === "text" && Boolean(message.text?.body?.trim());
+}
+
+function normalizeInboundMessageType(value: unknown): InboundMessageType {
+  const type = safeString(value).toLowerCase();
+
+  if (
+    type === "text" ||
+    type === "image" ||
+    type === "video" ||
+    type === "document" ||
+    type === "audio" ||
+    type === "sticker" ||
+    type === "location" ||
+    type === "contacts" ||
+    type === "interactive" ||
+    type === "button"
+  ) {
+    return type;
+  }
+
+  return type ? "unknown" : "text";
+}
+
+function getMediaFromMessage(message: WaMessage) {
+  const type = normalizeInboundMessageType(message.type);
+
+  if (type === "image" && message.image?.id) {
+    return {
+      type,
+      mediaId: safeString(message.image.id),
+      caption: safeString(message.image.caption),
+      filename: "",
+      mimeType: safeString(message.image.mime_type),
+    };
+  }
+
+  if (type === "video" && message.video?.id) {
+    return {
+      type,
+      mediaId: safeString(message.video.id),
+      caption: safeString(message.video.caption),
+      filename: "",
+      mimeType: safeString(message.video.mime_type),
+    };
+  }
+
+  if (type === "document" && message.document?.id) {
+    return {
+      type,
+      mediaId: safeString(message.document.id),
+      caption: safeString(message.document.caption),
+      filename: safeString(message.document.filename),
+      mimeType: safeString(message.document.mime_type),
+    };
+  }
+
+  if (type === "audio" && message.audio?.id) {
+    return {
+      type,
+      mediaId: safeString(message.audio.id),
+      caption: "",
+      filename: "",
+      mimeType: safeString(message.audio.mime_type),
+    };
+  }
+
+  if (type === "sticker" && message.sticker?.id) {
+    return {
+      type,
+      mediaId: safeString(message.sticker.id),
+      caption: "",
+      filename: "",
+      mimeType: safeString(message.sticker.mime_type),
+    };
+  }
+
+  return null;
+}
+
+function getMediaProxyUrl(mediaId: string) {
+  return `/api/whatsapp/media/${encodeURIComponent(mediaId)}`;
+}
+
+function getMessageBody(message: WaMessage) {
   if (message.type === "text" && message.text?.body?.trim()) {
     return message.text.body.trim();
+  }
+
+  const media = getMediaFromMessage(message);
+
+  if (media) {
+    if (media.caption) {
+      return media.caption;
+    }
+
+    if (media.filename) {
+      return media.filename;
+    }
+
+    if (media.type === "image") {
+      return "📷 Image";
+    }
+
+    if (media.type === "video") {
+      return "🎥 Video";
+    }
+
+    if (media.type === "document") {
+      return "📄 Document";
+    }
+
+    if (media.type === "audio") {
+      return "🎧 Audio";
+    }
+
+    if (media.type === "sticker") {
+      return "🏷️ Sticker";
+    }
+
+    return "Media message";
+  }
+
+  if (message.type === "location" && message.location) {
+    const name = safeString(message.location.name);
+    const address = safeString(message.location.address);
+
+    if (name || address) {
+      return [name, address].filter(Boolean).join(" · ");
+    }
+
+    return `Location: ${message.location.latitude}, ${message.location.longitude}`;
   }
 
   return `[${message.type || "message"}]`;
 }
 
-function isRealTextMessage(message: WaMessage) {
-  return message.type === "text" && Boolean(message.text?.body?.trim());
+function getMessageType(message: WaMessage): InboundMessageType {
+  return normalizeInboundMessageType(message.type);
+}
+
+function getErrorMessage(error: unknown, fallback = "Unknown error") {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+
+  try {
+    const json = JSON.stringify(error);
+
+    if (json && json !== "{}") {
+      return json;
+    }
+  } catch {
+    // Ignore.
+  }
+
+  return fallback;
+}
+
+function isSchemaError(error: unknown) {
+  const message = String(
+    (error as { message?: string })?.message ||
+      (error as { details?: string })?.details ||
+      (error as { hint?: string })?.hint ||
+      ""
+  ).toLowerCase();
+
+  return (
+    message.includes("column") ||
+    message.includes("schema cache") ||
+    message.includes("could not find") ||
+    message.includes("does not exist") ||
+    message.includes("relation")
+  );
+}
+
+function getAiDebugStatus() {
+  return {
+    supabaseConfigured: isSupabaseConfigured(),
+    whatsappConfigured: isWhatsAppConfigured(),
+    openAiConfigured: isOpenAiConfigured(),
+    hasWhatsappToken: Boolean(process.env.WHATSAPP_ACCESS_TOKEN?.trim()),
+    hasPhoneNumberId: Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID?.trim()),
+    hasOpenAiKey: Boolean(process.env.OPENAI_API_KEY?.trim()),
+  };
+}
+
+function getContactDisplayName(contact: ArtipilotContact, fallbackPhone: string) {
+  return (
+    safeString(contact.name) ||
+    safeString(contact.profile_name) ||
+    safeString(fallbackPhone) ||
+    "Customer"
+  );
+}
+
+function getNotificationBody(name: string, text: string) {
+  const cleanName = safeString(name);
+  const cleanText = safeString(text);
+
+  if (!cleanText) {
+    return cleanName ? `${cleanName} sent a message` : "New customer message";
+  }
+
+  const preview = cleanText.length > 120 ? `${cleanText.slice(0, 117)}...` : cleanText;
+
+  return cleanName ? `${cleanName}: ${preview}` : preview;
+}
+
+async function notifyNewInboundMessage(params: {
+  contact: ArtipilotContact;
+  phone: string;
+  text: string;
+}) {
+  try {
+    const name = getContactDisplayName(params.contact, params.phone);
+
+    const result = await sendPushNotificationToAll({
+      title: "New WhatsApp message",
+      body: getNotificationBody(name, params.text),
+      url: "/dashboard/inbox",
+      tag: `artipilot-whatsapp-${params.contact.id}`,
+      contactId: params.contact.id,
+      phone: params.phone,
+    });
+
+    logDebug("Push notification result", result);
+  } catch (error) {
+    logError("Push notification failed", error);
+  }
 }
 
 async function messageAlreadyExists(whatsappMessageId?: string) {
@@ -127,6 +422,7 @@ async function upsertContact(phone: string, profileName?: string | null) {
   const db = getSupabaseAdmin();
   const normalizedPhone = normalizePhone(phone);
   const cleanProfileName = safeString(profileName);
+  const now = new Date().toISOString();
 
   logDebug("Upserting contact", {
     phone: normalizedPhone,
@@ -135,7 +431,7 @@ async function upsertContact(phone: string, profileName?: string | null) {
 
   const { data: existing, error: existingError } = await db
     .from("artipilot_contacts")
-    .select("id, phone, name, profile_name, ai_enabled")
+    .select("id, phone, name, profile_name, ai_enabled, unread_count")
     .eq("phone", normalizedPhone)
     .maybeSingle<ArtipilotContact>();
 
@@ -146,7 +442,7 @@ async function upsertContact(phone: string, profileName?: string | null) {
 
   if (existing?.id) {
     const updates: Record<string, unknown> = {
-      updated_at: new Date().toISOString(),
+      updated_at: now,
     };
 
     if (cleanProfileName && !existing.profile_name) {
@@ -157,17 +453,19 @@ async function upsertContact(phone: string, profileName?: string | null) {
       updates.name = cleanProfileName;
     }
 
-    const { error: updateError } = await db
+    const { data: updated, error: updateError } = await db
       .from("artipilot_contacts")
       .update(updates)
-      .eq("id", existing.id);
+      .eq("id", existing.id)
+      .select("id, phone, name, profile_name, ai_enabled, unread_count")
+      .single<ArtipilotContact>();
 
     if (updateError) {
       logError("Contact update failed", updateError);
       throw updateError;
     }
 
-    return existing;
+    return updated || existing;
   }
 
   const { data: created, error: createError } = await db
@@ -178,10 +476,12 @@ async function upsertContact(phone: string, profileName?: string | null) {
       profile_name: cleanProfileName || null,
       ai_enabled: true,
       unread_count: 0,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      last_message: null,
+      last_message_at: null,
+      created_at: now,
+      updated_at: now,
     })
-    .select("id, phone, name, profile_name, ai_enabled")
+    .select("id, phone, name, profile_name, ai_enabled, unread_count")
     .single<ArtipilotContact>();
 
   if (createError) {
@@ -192,131 +492,49 @@ async function upsertContact(phone: string, profileName?: string | null) {
   return created;
 }
 
-async function insertInboundMessage(params: {
+async function updateContactAfterOutbound(params: {
+  contactId?: string | null;
   phone: string;
-  whatsappMessageId?: string;
-  content: string;
-  messageType: string;
-  createdAt: string;
+  body: string;
 }) {
   const db = getSupabaseAdmin();
+  const now = new Date().toISOString();
 
-  logDebug("Saving inbound message", {
-    phone: params.phone,
-    whatsappMessageId: params.whatsappMessageId || null,
-    messageType: params.messageType,
+  const query = db.from("artipilot_contacts").update({
+    last_message: params.body,
+    last_message_at: now,
+    updated_at: now,
   });
 
-  const { data, error } = await db
-    .from("artipilot_messages")
-    .insert({
-      contact_phone: params.phone,
-      whatsapp_message_id: params.whatsappMessageId || null,
-      role: "user",
-      direction: "inbound",
-      message_type: params.messageType || "text",
-      content: params.content,
-      delivery_status: "received",
-      created_at: params.createdAt,
-      updated_at: new Date().toISOString(),
-    })
-    .select("id")
-    .single();
+  const { error } = params.contactId
+    ? await query.eq("id", params.contactId)
+    : await query.eq("phone", normalizePhone(params.phone));
 
   if (error) {
-    logError("Inbound message insert failed", error);
-    throw error;
-  }
-
-  return data;
-}
-
-async function insertOutboundAiMessage(params: {
-  phone: string;
-  content: string;
-  status: "pending" | "sent" | "failed";
-  whatsappMessageId?: string | null;
-  statusError?: string | null;
-}) {
-  const db = getSupabaseAdmin();
-
-  logDebug("Saving outbound AI message", {
-    phone: params.phone,
-    status: params.status,
-    whatsappMessageId: params.whatsappMessageId || null,
-  });
-
-  const { data, error } = await db
-    .from("artipilot_messages")
-    .insert({
-      contact_phone: params.phone,
-      whatsapp_message_id: params.whatsappMessageId || null,
-      role: "assistant",
-      direction: "outbound",
-      message_type: "text",
-      content: params.content,
-      delivery_status: params.status,
-      status_error: params.statusError || null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .select("id")
-    .single();
-
-  if (error) {
-    logError("Outbound AI message insert failed", error);
-    throw error;
-  }
-
-  return data;
-}
-
-async function updateMessageStatus(params: {
-  messageId: string;
-  status: string;
-  statusError?: string | null;
-  whatsappMessageId?: string | null;
-}) {
-  const db = getSupabaseAdmin();
-
-  const { error } = await db
-    .from("artipilot_messages")
-    .update({
-      delivery_status: params.status,
-      status_error: params.statusError || null,
-      whatsapp_message_id: params.whatsappMessageId || null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", params.messageId);
-
-  if (error) {
-    logError("Message status update failed", error);
+    logError("Contact outbound update failed", error);
   }
 }
 
-async function listRecentMessagesForPhone(phone: string) {
-  const db = getSupabaseAdmin();
-  const normalizedPhone = normalizePhone(phone);
+function getStatusError(status: WaStatus) {
+  const firstError = status.errors?.[0];
 
-  const { data, error } = await db
-    .from("artipilot_messages")
-    .select("id, contact_phone, role, direction, message_type, content, whatsapp_message_id, created_at")
-    .eq("contact_phone", normalizedPhone)
-    .order("created_at", { ascending: true })
-    .limit(30)
-    .returns<ArtipilotMessage[]>();
-
-  if (error) {
-    logError("Recent messages lookup failed", error);
-    return [];
+  if (!firstError) {
+    return null;
   }
 
-  return data || [];
+  return {
+    code: firstError.code || null,
+    title: firstError.title || null,
+    message: firstError.message || null,
+    details: firstError.error_data?.details || null,
+  };
 }
 
 async function handleStatusUpdate(status: WaStatus) {
   const whatsappMessageId = safeString(status.id);
   const deliveryStatus = safeString(status.status);
+  const updatedAt = waTimestamp(status.timestamp);
+  const statusError = getStatusError(status);
 
   if (!whatsappMessageId || !deliveryStatus) {
     return;
@@ -327,19 +545,125 @@ async function handleStatusUpdate(status: WaStatus) {
   logDebug("Handling WhatsApp status update", {
     whatsappMessageId,
     deliveryStatus,
+    statusError,
   });
 
-  const { error } = await db
+  const updates: Record<string, unknown> = {
+    delivery_status: deliveryStatus,
+    delivery_updated_at: updatedAt,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (deliveryStatus === "delivered") {
+    updates.delivered_at = updatedAt;
+  }
+
+  if (deliveryStatus === "read") {
+    updates.read_at = updatedAt;
+  }
+
+  if (deliveryStatus === "failed") {
+    updates.delivery_error = statusError || status.errors || null;
+    updates.status_error =
+      statusError?.message ||
+      statusError?.details ||
+      statusError?.title ||
+      "WhatsApp delivery failed.";
+  }
+
+  const primary = await db
     .from("artipilot_messages")
-    .update({
-      delivery_status: deliveryStatus,
-      updated_at: new Date().toISOString(),
-    })
+    .update(updates)
     .eq("whatsapp_message_id", whatsappMessageId);
 
-  if (error) {
-    logError("Status update failed", error);
+  if (!primary.error) {
+    return;
   }
+
+  if (!isSchemaError(primary.error)) {
+    logError("Status update failed", primary.error);
+    return;
+  }
+
+  const simpleUpdates: Record<string, unknown> = {
+    delivery_status: deliveryStatus,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (deliveryStatus === "failed") {
+    simpleUpdates.status_error =
+      statusError?.message ||
+      statusError?.details ||
+      statusError?.title ||
+      "WhatsApp delivery failed.";
+  }
+
+  const fallback = await db
+    .from("artipilot_messages")
+    .update(simpleUpdates)
+    .eq("whatsapp_message_id", whatsappMessageId);
+
+  if (fallback.error) {
+    logError("Fallback status update failed", fallback.error);
+  }
+}
+
+async function listRecentMessagesForPhone(phone: string) {
+  const db = getSupabaseAdmin();
+  const normalizedPhone = normalizePhone(phone);
+
+  const { data, error } = await db
+    .from("artipilot_messages")
+    .select(
+      "id, contact_phone, role, sender_type, direction, message_type, content, whatsapp_message_id, delivery_status, status_error, created_at"
+    )
+    .eq("contact_phone", normalizedPhone)
+    .order("created_at", { ascending: false })
+    .limit(30)
+    .returns<ArtipilotMessage[]>();
+
+  if (!error) {
+    return [...(data || [])].reverse();
+  }
+
+  if (!isSchemaError(error)) {
+    logError("Recent messages lookup failed", error);
+    return [];
+  }
+
+  const fallback = await db
+    .from("artipilot_messages")
+    .select(
+      "id, contact_phone, role, direction, message_type, content, whatsapp_message_id, delivery_status, status_error, created_at"
+    )
+    .eq("contact_phone", normalizedPhone)
+    .order("created_at", { ascending: false })
+    .limit(30)
+    .returns<ArtipilotMessage[]>();
+
+  if (fallback.error) {
+    logError("Fallback recent messages lookup failed", fallback.error);
+    return [];
+  }
+
+  return [...(fallback.data || [])].reverse();
+}
+
+function buildHistoryForAi(messages: ArtipilotMessage[]) {
+  return messages
+    .filter((message) => safeString(message.content))
+    .filter((message) => {
+      const messageType = safeString(message.message_type).toLowerCase();
+      return !messageType || messageType === "text";
+    })
+    .slice(-20)
+    .map((message) => ({
+      role:
+        message.direction === "inbound"
+          ? ("user" as const)
+          : ("assistant" as const),
+      content: safeString(message.content),
+    }));
 }
 
 async function maybeAutoReply(params: {
@@ -355,6 +679,7 @@ async function maybeAutoReply(params: {
     contactId: params.contact.id,
     aiEnabled: params.contact.ai_enabled,
     inboundBody,
+    config: getAiDebugStatus(),
   });
 
   if (!params.contact?.id) {
@@ -373,28 +698,29 @@ async function maybeAutoReply(params: {
   }
 
   if (!isOpenAiConfigured()) {
-    logError("Auto reply skipped: OpenAI is not configured", {
-      hasApiKey: Boolean(process.env.OPENAI_API_KEY),
-    });
+    logError("Auto reply skipped: OpenAI is not configured", getAiDebugStatus());
+    return;
+  }
+
+  if (!isWhatsAppConfigured()) {
+    logError(
+      "Auto reply skipped: WhatsApp sender is not configured",
+      getAiDebugStatus()
+    );
     return;
   }
 
   const recentMessages = await listRecentMessagesForPhone(phone);
-
-  const history = recentMessages
-    .filter((message) => safeString(message.content))
-    .slice(-20)
-    .map((message) => ({
-      role:
-        message.direction === "inbound"
-          ? ("user" as const)
-          : ("assistant" as const),
-      content: safeString(message.content),
-    }));
+  const history = buildHistoryForAi(recentMessages);
+  const isFirstCustomerChat =
+    recentMessages.filter((message) => message.direction === "inbound")
+      .length <= 1;
 
   logDebug("Generating Nero reply", {
     phone,
+    recentMessagesCount: recentMessages.length,
     historyCount: history.length,
+    isFirstCustomerChat,
   });
 
   let replyText = "";
@@ -416,11 +742,25 @@ async function maybeAutoReply(params: {
     return;
   }
 
-  const pendingMessage = await insertOutboundAiMessage({
-    phone,
-    content: replyText,
-    status: "pending",
-  });
+  let pendingMessage: { id: string } | null = null;
+
+  try {
+    pendingMessage = await insertOutboundMessage({
+      contactId: params.contact.id,
+      phone,
+      body: replyText,
+      senderType: "ai",
+      status: "pending",
+      whatsappMessageId: null,
+      statusError: null,
+      messageType: "text",
+      mediaId: null,
+      mediaUrl: null,
+    });
+  } catch (error) {
+    logError("Could not save pending Nero reply", error);
+    return;
+  }
 
   logDebug("Sending Nero reply through WhatsApp", {
     phone,
@@ -430,23 +770,40 @@ async function maybeAutoReply(params: {
   const sendResult = await sendWhatsAppText(phone, replyText);
 
   if (!sendResult.ok) {
-    logError("WhatsApp send failed for Nero reply", sendResult.error);
+    logError("WhatsApp send failed for Nero reply", {
+      error: sendResult.error,
+      raw: sendResult,
+    });
 
-    await updateMessageStatus({
-      messageId: pendingMessage.id,
+    await updateOutboundMessage(pendingMessage.id, {
       status: "failed",
-      statusError: sendResult.error || "Unknown WhatsApp send error",
-      whatsappMessageId: null,
+      delivery_status: "failed",
+      status_error: sendResult.error || "Unknown WhatsApp send error",
+      delivery_error: sendResult.error || "Unknown WhatsApp send error",
+      whatsapp_message_id: null,
+      message_type: "text",
+      media_id: null,
+      media_url: null,
     });
 
     return;
   }
 
-  await updateMessageStatus({
-    messageId: pendingMessage.id,
+  await updateOutboundMessage(pendingMessage.id, {
     status: "sent",
-    statusError: null,
-    whatsappMessageId: sendResult.messageId || null,
+    delivery_status: "sent",
+    status_error: null,
+    delivery_error: null,
+    whatsapp_message_id: sendResult.messageId || null,
+    message_type: "text",
+    media_id: null,
+    media_url: null,
+  });
+
+  await updateContactAfterOutbound({
+    contactId: params.contact.id,
+    phone,
+    body: replyText,
   });
 
   logDebug("Nero auto reply sent successfully", {
@@ -493,84 +850,104 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON." }, { status: 400 });
   }
 
-  const value = getWebhookValue(body);
+  const values = getWebhookValues(body);
 
-  if (!value) {
-    logDebug("Webhook received without value");
+  if (values.length === 0) {
+    logDebug("Webhook received without values");
     return NextResponse.json({ ok: true });
   }
 
-  const profileMap = new Map<string, string>();
+  for (const value of values) {
+    const profileMap = new Map<string, string>();
 
-  for (const contact of value.contacts || []) {
-    if (contact.wa_id && contact.profile?.name) {
-      profileMap.set(contact.wa_id, contact.profile.name);
-    }
-  }
-
-  for (const status of value.statuses || []) {
-    try {
-      await handleStatusUpdate(status);
-    } catch (error) {
-      logError("Webhook status handling failed", error);
-    }
-  }
-
-  for (const message of value.messages || []) {
-    const from = safeString(message.from);
-
-    if (!from) {
-      logDebug("Skipped message: missing from");
-      continue;
+    for (const contact of value.contacts || []) {
+      if (contact.wa_id && contact.profile?.name) {
+        profileMap.set(contact.wa_id, contact.profile.name);
+      }
     }
 
-    const phone = normalizePhone(from);
-    const profileName = profileMap.get(from) || null;
-    const text = messageBody(message);
-    const createdAt = waTimestamp(message.timestamp);
-    const whatsappMessageId = safeString(message.id);
-    const messageType = safeString(message.type) || "text";
+    for (const status of value.statuses || []) {
+      try {
+        await handleStatusUpdate(status);
+      } catch (error) {
+        logError("Webhook status handling failed", error);
+      }
+    }
 
-    logDebug("Incoming WhatsApp message received", {
-      phone,
-      whatsappMessageId,
-      messageType,
-      isText: isRealTextMessage(message),
-    });
+    for (const message of value.messages || []) {
+      const from = safeString(message.from);
 
-    try {
-      const duplicate = await messageAlreadyExists(whatsappMessageId);
-
-      if (duplicate) {
-        logDebug("Skipped duplicate WhatsApp message", {
-          whatsappMessageId,
-        });
+      if (!from) {
+        logDebug("Skipped message: missing from");
         continue;
       }
 
-      const contact = await upsertContact(phone, profileName);
+      const phone = normalizePhone(from);
+      const profileName = profileMap.get(from) || null;
+      const text = getMessageBody(message);
+      const createdAt = waTimestamp(message.timestamp);
+      const whatsappMessageId = safeString(message.id);
+      const messageType = getMessageType(message);
+      const media = getMediaFromMessage(message);
+      const mediaId = media?.mediaId || null;
+      const mediaUrl = mediaId ? getMediaProxyUrl(mediaId) : null;
 
-      await insertInboundMessage({
+      logDebug("Incoming WhatsApp message received", {
         phone,
-        whatsappMessageId: whatsappMessageId || undefined,
-        content: text,
+        whatsappMessageId,
         messageType,
-        createdAt,
+        mediaId,
+        mediaUrl,
+        isText: isRealTextMessage(message),
       });
 
-      if (isRealTextMessage(message)) {
-        await maybeAutoReply({
+      try {
+        const duplicate = await messageAlreadyExists(whatsappMessageId);
+
+        if (duplicate) {
+          logDebug("Skipped duplicate WhatsApp message", {
+            whatsappMessageId,
+          });
+          continue;
+        }
+
+        const contact = await upsertContact(phone, profileName);
+
+        await saveInboundMessage({
+          contactId: contact.id,
+          phone,
+          body: text,
+          waMessageId: whatsappMessageId || undefined,
+          createdAt,
+          raw: message,
+          messageType,
+          mediaId,
+          mediaUrl,
+        });
+
+        await touchContactLastMessage(contact.id, text);
+
+        void notifyNewInboundMessage({
           contact,
           phone,
-          inboundBody: message.text?.body?.trim() || "",
+          text,
         });
-      } else {
-        logDebug("Auto reply skipped: not a real text message yet", {
-          messageType,
-        });
+
+        if (isRealTextMessage(message)) {
+          await maybeAutoReply({
+            contact,
+            phone,
+            inboundBody: message.text?.body?.trim() || "",
+          });
+        } else {
+          logDebug("Auto reply skipped: media/non-text message", {
+            messageType,
+            mediaId,
+          });
+        }
+      } catch (error) {
+        logError("Webhook message handling failed", error);
       }
-    } catch (error) {
-      logError("Webhook message handling failed", error);
     }
   }
 

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 
 const NAV = [
   { href: "/dashboard/inbox", label: "Inbox", shortLabel: "Inbox" },
@@ -15,8 +16,291 @@ const NAV = [
   { href: "/dashboard/status", label: "System Status", shortLabel: "Status" },
 ];
 
+type PushStatus =
+  | "checking"
+  | "unsupported"
+  | "missing_key"
+  | "denied"
+  | "ready"
+  | "enabled"
+  | "saving"
+  | "error";
+
 function isActivePath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+function getPageTitle(pathname: string) {
+  const activeItem = NAV.find((item) => isActivePath(pathname, item.href));
+
+  return activeItem?.label || "Artipilot Private";
+}
+
+function cleanString(value: unknown) {
+  return String(value || "").trim();
+}
+
+function urlBase64ToUint8Array(base64String: string) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = `${base64String}${padding}`
+    .replace(/-/g, "+")
+    .replace(/_/g, "/");
+
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+
+  for (let index = 0; index < rawData.length; index += 1) {
+    outputArray[index] = rawData.charCodeAt(index);
+  }
+
+  return outputArray;
+}
+
+function getSubscriptionEndpoint(subscription: PushSubscription | null) {
+  return subscription?.endpoint || "";
+}
+
+function getPushErrorMessage(payload: unknown, fallback: string) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "error" in payload &&
+    typeof payload.error === "string" &&
+    payload.error.trim()
+  ) {
+    return payload.error;
+  }
+
+  return fallback;
+}
+
+function NotificationButton() {
+  const [status, setStatus] = useState<PushStatus>("checking");
+  const [message, setMessage] = useState<string>("Checking notifications...");
+  const [busy, setBusy] = useState(false);
+
+  const vapidPublicKey = useMemo(
+    () => cleanString(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY),
+    []
+  );
+
+  async function getRegistration() {
+    if (!("serviceWorker" in navigator)) {
+      throw new Error("Service workers are not supported on this device.");
+    }
+
+    const existing = await navigator.serviceWorker.getRegistration(
+      "/artipilot-push-sw.js"
+    );
+
+    if (existing) {
+      return existing;
+    }
+
+    return navigator.serviceWorker.register("/artipilot-push-sw.js", {
+      scope: "/",
+    });
+  }
+
+  async function saveSubscription(subscription: PushSubscription) {
+    const response = await fetch("/api/private/push-subscription", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...subscription.toJSON(),
+        userAgent: navigator.userAgent,
+      }),
+    });
+
+    let payload: unknown = null;
+
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        getPushErrorMessage(payload, "Could not save notification subscription.")
+      );
+    }
+  }
+
+  async function checkNotificationStatus() {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (!("Notification" in window) || !("serviceWorker" in navigator)) {
+      setStatus("unsupported");
+      setMessage("Notifications are not supported on this device/browser.");
+      return;
+    }
+
+    if (!("PushManager" in window)) {
+      setStatus("unsupported");
+      setMessage("Push notifications are not supported on this browser.");
+      return;
+    }
+
+    if (!vapidPublicKey) {
+      setStatus("missing_key");
+      setMessage("Missing NEXT_PUBLIC_VAPID_PUBLIC_KEY in Vercel.");
+      return;
+    }
+
+    if (Notification.permission === "denied") {
+      setStatus("denied");
+      setMessage("Notifications are blocked in this browser.");
+      return;
+    }
+
+    try {
+      const registration = await getRegistration();
+      const subscription = await registration.pushManager.getSubscription();
+
+      if (getSubscriptionEndpoint(subscription)) {
+        setStatus("enabled");
+        setMessage("Phone notifications are enabled.");
+        return;
+      }
+
+      setStatus("ready");
+      setMessage("Enable phone notifications for new WhatsApp messages.");
+    } catch (error) {
+      console.error("Notification status check failed:", error);
+      setStatus("error");
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not check notification status."
+      );
+    }
+  }
+
+  async function enableNotifications() {
+    if (busy) {
+      return;
+    }
+
+    setBusy(true);
+    setStatus("saving");
+    setMessage("Enabling notifications...");
+
+    try {
+      if (!("Notification" in window)) {
+        throw new Error("Notifications are not supported on this browser.");
+      }
+
+      if (!vapidPublicKey) {
+        throw new Error("Missing NEXT_PUBLIC_VAPID_PUBLIC_KEY in Vercel.");
+      }
+
+      const permission = await Notification.requestPermission();
+
+      if (permission !== "granted") {
+        setStatus(permission === "denied" ? "denied" : "ready");
+        setMessage(
+          permission === "denied"
+            ? "Notifications are blocked in this browser."
+            : "Notification permission was not granted."
+        );
+        return;
+      }
+
+      const registration = await getRegistration();
+
+      let subscription = await registration.pushManager.getSubscription();
+
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+        });
+      }
+
+      await saveSubscription(subscription);
+
+      setStatus("enabled");
+      setMessage("Phone notifications are enabled.");
+    } catch (error) {
+      console.error("Enable notifications failed:", error);
+      setStatus("error");
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not enable notifications."
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void checkNotificationStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const isEnabled = status === "enabled";
+  const isDisabled =
+    busy ||
+    status === "unsupported" ||
+    status === "missing_key" ||
+    status === "denied" ||
+    status === "checking";
+
+  return (
+    <div className="rounded-2xl border border-[#e9edef] bg-[#f7f8f8] p-3">
+      <div className="flex items-start gap-3">
+        <div
+          className={[
+            "flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-base",
+            isEnabled
+              ? "bg-[#d9fdd3] text-[#008069]"
+              : "bg-white text-[#54656f]",
+          ].join(" ")}
+        >
+          🔔
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-black text-[#111b21]">
+            Phone notifications
+          </p>
+
+          <p className="mt-1 text-[11px] leading-5 text-[#667781]">
+            {message}
+          </p>
+
+          <button
+            type="button"
+            disabled={isDisabled || isEnabled}
+            onClick={() => void enableNotifications()}
+            className={[
+              "mt-2 w-full rounded-xl px-3 py-2 text-xs font-black transition active:scale-[0.98]",
+              isEnabled
+                ? "bg-[#d9fdd3] text-[#008069]"
+                : "bg-[#00a884] text-white hover:bg-[#008f72]",
+              isDisabled && !isEnabled
+                ? "cursor-not-allowed opacity-50"
+                : "",
+            ].join(" ")}
+          >
+            {status === "checking"
+              ? "Checking..."
+              : status === "saving"
+                ? "Enabling..."
+                : isEnabled
+                  ? "Enabled"
+                  : "Enable"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function DashboardShell({
@@ -25,23 +309,28 @@ export default function DashboardShell({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const pageTitle = getPageTitle(pathname);
 
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-[#0b141a] text-[#e9edef]">
-      <aside className="hidden w-60 shrink-0 flex-col border-r border-white/10 bg-[#111b21] md:flex">
-        <div className="border-b border-white/10 px-5 py-5">
-          <div className="mb-3 flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#00a884]/15 text-base font-black text-[#00a884]">
+    <div className="flex h-[100dvh] overflow-hidden bg-[#f0f2f5] text-[#111b21]">
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-[#d1d7db] bg-white md:flex">
+        <div className="border-b border-[#e9edef] bg-[#f0f2f5] px-5 py-5">
+          <div className="mb-4 flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#d9fdd3] text-base font-black text-[#008069]">
               A
             </div>
 
             <div className="min-w-0">
-              <p className="text-base font-black tracking-tight">Artipilot</p>
-              <p className="text-xs text-[#8696a0]">Private WhatsApp AI</p>
+              <p className="truncate text-base font-black tracking-tight text-[#111b21]">
+                Artipilot Private
+              </p>
+              <p className="truncate text-xs font-medium text-[#667781]">
+                NEXA WhatsApp AI
+              </p>
             </div>
           </div>
 
-          <span className="inline-flex rounded-full bg-[#00a884]/15 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-[#00a884]">
+          <span className="inline-flex rounded-full bg-[#d9fdd3] px-3 py-1 text-[10px] font-black uppercase tracking-wider text-[#008069]">
             Private system
           </span>
         </div>
@@ -57,8 +346,8 @@ export default function DashboardShell({
                 className={[
                   "rounded-xl px-3 py-3 text-sm font-bold transition",
                   active
-                    ? "bg-[#00a884]/15 text-[#00a884]"
-                    : "text-[#8696a0] hover:bg-white/[0.06] hover:text-white",
+                    ? "bg-[#e7fce3] text-[#008069]"
+                    : "text-[#54656f] hover:bg-[#f5f6f6] hover:text-[#111b21]",
                 ].join(" ")}
               >
                 {item.label}
@@ -67,11 +356,13 @@ export default function DashboardShell({
           })}
         </nav>
 
-        <div className="border-t border-white/10 p-3">
+        <div className="space-y-3 border-t border-[#e9edef] p-3">
+          <NotificationButton />
+
           <Link
             href="/logout"
             prefetch={false}
-            className="block rounded-xl px-3 py-3 text-sm font-bold text-[#8696a0] transition hover:bg-red-500/10 hover:text-red-300"
+            className="block rounded-xl px-3 py-3 text-sm font-bold text-[#667781] transition hover:bg-red-50 hover:text-red-600"
           >
             Log out
           </Link>
@@ -79,16 +370,18 @@ export default function DashboardShell({
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex shrink-0 items-center justify-between border-b border-white/10 bg-[#111b21] px-4 py-3 md:hidden">
+        <header className="flex shrink-0 items-center justify-between border-b border-[#d1d7db] bg-[#f0f2f5] px-4 py-3 md:hidden">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#00a884]/15 text-sm font-black text-[#00a884]">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#d9fdd3] text-sm font-black text-[#008069]">
               A
             </div>
 
             <div className="min-w-0">
-              <p className="truncate text-sm font-black">Artipilot</p>
-              <p className="truncate text-[11px] text-[#8696a0]">
-                Private WhatsApp AI
+              <p className="truncate text-sm font-black text-[#111b21]">
+                {pageTitle}
+              </p>
+              <p className="truncate text-[11px] font-medium text-[#667781]">
+                Artipilot Private
               </p>
             </div>
           </div>
@@ -96,13 +389,17 @@ export default function DashboardShell({
           <Link
             href="/logout"
             prefetch={false}
-            className="shrink-0 rounded-full bg-white/[0.06] px-3 py-2 text-xs font-bold text-[#8696a0] hover:bg-red-500/10 hover:text-red-300"
+            className="shrink-0 rounded-full bg-white px-3 py-2 text-xs font-bold text-[#667781] shadow-sm transition hover:bg-red-50 hover:text-red-600"
           >
             Log out
           </Link>
         </header>
 
-        <nav className="flex shrink-0 gap-2 overflow-x-auto border-b border-white/10 bg-[#111b21] px-2 py-2 md:hidden">
+        <div className="border-b border-[#d1d7db] bg-white px-3 py-2 md:hidden">
+          <NotificationButton />
+        </div>
+
+        <nav className="flex shrink-0 gap-2 overflow-x-auto border-b border-[#d1d7db] bg-white px-2 py-2 md:hidden">
           {NAV.map((item) => {
             const active = isActivePath(pathname, item.href);
 
@@ -113,8 +410,8 @@ export default function DashboardShell({
                 className={[
                   "shrink-0 rounded-full px-3 py-2 text-xs font-black transition",
                   active
-                    ? "bg-[#00a884]/15 text-[#00a884]"
-                    : "bg-white/[0.04] text-[#8696a0] hover:bg-white/[0.08] hover:text-white",
+                    ? "bg-[#e7fce3] text-[#008069]"
+                    : "bg-[#f0f2f5] text-[#54656f] hover:bg-[#e9edef] hover:text-[#111b21]",
                 ].join(" ")}
               >
                 {item.shortLabel}
@@ -123,7 +420,9 @@ export default function DashboardShell({
           })}
         </nav>
 
-        <main className="min-h-0 flex-1 overflow-hidden">{children}</main>
+        <main className="min-h-0 flex-1 overflow-hidden bg-[#f0f2f5]">
+          {children}
+        </main>
       </div>
     </div>
   );

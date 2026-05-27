@@ -36,10 +36,50 @@ function getErrorMessage(error: unknown, fallback: string) {
   }
 
   try {
-    return JSON.stringify(error);
+    const json = JSON.stringify(error);
+
+    if (json && json !== "{}") {
+      return json;
+    }
   } catch {
-    return fallback;
+    // Ignore JSON stringify errors.
   }
+
+  return fallback;
+}
+
+function sortMessagesByTime(messages: ApiMessage[]) {
+  return [...messages].sort((a, b) => {
+    const first = new Date(a.created_at).getTime();
+    const second = new Date(b.created_at).getTime();
+
+    if (Number.isNaN(first) || Number.isNaN(second)) {
+      return 0;
+    }
+
+    return first - second;
+  });
+}
+
+function normalizePhoneForDisplay(phone: string | null | undefined) {
+  return cleanString(phone).replace(/\s+/g, "");
+}
+
+function isSchemaError(error: unknown) {
+  const message = String(
+    (error as { message?: string })?.message ||
+      (error as { details?: string })?.details ||
+      (error as { hint?: string })?.hint ||
+      ""
+  ).toLowerCase();
+
+  return (
+    message.includes("column") ||
+    message.includes("schema cache") ||
+    message.includes("could not find") ||
+    message.includes("does not exist") ||
+    message.includes("relation")
+  );
 }
 
 export async function fetchContactsAction(): Promise<{
@@ -103,7 +143,7 @@ export async function fetchMessagesAction(contactId: string): Promise<{
     }
 
     return {
-      messages: messages || [],
+      messages: sortMessagesByTime(messages || []),
     };
   } catch (error) {
     console.error("fetchMessagesAction error:", error);
@@ -158,16 +198,57 @@ export async function sendMessageAction(
       };
     }
 
-    if (!contact.phone) {
+    const phone = normalizePhoneForDisplay(contact.phone);
+
+    if (!phone) {
       return {
         error: "This contact has no phone number saved.",
       };
     }
 
-    const sendResult = await sendWhatsAppText(contact.phone, text);
+    /*
+      Save as pending first, then update after Meta responds.
+      This is safer and matches the /api/whatsapp/send route.
+    */
+    const pendingMessage = await insertOutboundMessage({
+      contactId: contact.id,
+      phone,
+      body: text,
+      senderType: "admin",
+      status: "pending",
+      whatsappMessageId: null,
+      statusError: null,
+      messageType: "text",
+      mediaId: null,
+      mediaUrl: null,
+    });
+
+    const sendResult = await sendWhatsAppText(phone, text);
 
     if (!sendResult.ok) {
       console.error("WhatsApp send failed:", sendResult);
+
+      try {
+        await updateOutboundMessage(pendingMessage.id, {
+          status: "failed",
+          delivery_status: "failed",
+          status_error:
+            sendResult.error ||
+            "WhatsApp failed to send this message. Check Meta settings.",
+          delivery_error:
+            sendResult.error ||
+            "WhatsApp failed to send this message. Check Meta settings.",
+          whatsapp_message_id: null,
+          message_type: "text",
+          media_id: null,
+          media_url: null,
+        });
+      } catch (databaseError) {
+        console.error(
+          "Failed to mark outbound message as failed:",
+          databaseError
+        );
+      }
 
       return {
         error:
@@ -179,22 +260,16 @@ export async function sendMessageAction(
     let savedMessage: ApiMessage | undefined;
 
     try {
-      savedMessage = await insertOutboundMessage({
-        contactId: contact.id,
-        phone: contact.phone,
-        body: text,
-        senderType: "admin",
+      savedMessage = await updateOutboundMessage(pendingMessage.id, {
         status: "sent",
-        whatsappMessageId: sendResult.messageId || null,
+        delivery_status: "sent",
+        status_error: null,
+        delivery_error: null,
+        whatsapp_message_id: sendResult.messageId || null,
+        message_type: "text",
+        media_id: null,
+        media_url: null,
       });
-
-      if (savedMessage?.id) {
-        savedMessage = await updateOutboundMessage(savedMessage.id, {
-          status: "sent",
-          status_error: null,
-          whatsapp_message_id: sendResult.messageId || null,
-        });
-      }
 
       await touchContactLastMessage(contact.id, text);
     } catch (databaseError) {
@@ -276,12 +351,18 @@ export async function fetchQuickRepliesAction(): Promise<{
 
     if (!primary.error && primary.data) {
       return {
-        items: primary.data.map((row) => ({
-          id: String(row.id),
-          title: String(row.title || "Quick reply"),
-          content: String(row.content || ""),
-        })),
+        items: primary.data
+          .map((row) => ({
+            id: String(row.id),
+            title: String(row.title || "Quick reply"),
+            content: String(row.content || ""),
+          }))
+          .filter((item) => item.content.trim()),
       };
+    }
+
+    if (primary.error && !isSchemaError(primary.error)) {
+      console.error("Primary quick replies error:", primary.error);
     }
 
     const fallback = await db
@@ -291,17 +372,23 @@ export async function fetchQuickRepliesAction(): Promise<{
       .order("created_at", { ascending: true });
 
     if (fallback.error || !fallback.data) {
+      if (fallback.error && !isSchemaError(fallback.error)) {
+        console.error("Fallback quick replies error:", fallback.error);
+      }
+
       return {
         items: [],
       };
     }
 
     return {
-      items: fallback.data.map((row) => ({
-        id: String(row.id),
-        title: String(row.title || "Quick reply"),
-        content: String(row.content || ""),
-      })),
+      items: fallback.data
+        .map((row) => ({
+          id: String(row.id),
+          title: String(row.title || "Quick reply"),
+          content: String(row.content || ""),
+        }))
+        .filter((item) => item.content.trim()),
     };
   } catch (error) {
     console.error("fetchQuickRepliesAction error:", error);
@@ -343,31 +430,39 @@ export async function suggestAiAction(contactId: string): Promise<{
       };
     }
 
-    const messages = await listMessagesForContact(cleanContactId);
+    const messages = sortMessagesByTime(
+      await listMessagesForContact(cleanContactId)
+    );
 
-    const lastInboundMessage = [...messages]
+    const textMessages = messages.filter((message) =>
+      cleanString(message.body)
+    );
+
+    const lastInboundMessage = [...textMessages]
       .reverse()
       .find((message) => message.direction === "inbound" && message.body);
 
     if (!lastInboundMessage?.body) {
       return {
-        error: "No customer message found to reply to.",
+        error: "No customer text message found to reply to.",
       };
     }
 
-    const recentMessages = messages
-      .filter((message) => message.body)
-      .slice(-20)
-      .map((message) => ({
-        role:
-          message.direction === "inbound"
-            ? ("user" as const)
-            : ("assistant" as const),
-        content: String(message.body || ""),
-      }));
+    /*
+      Keep AI suggestion text-only for now.
+      Media messages can appear in the chat, but we do not send image/video/PDF
+      content to the AI brain yet.
+    */
+    const recentMessages = textMessages.slice(-24).map((message) => ({
+      role:
+        message.direction === "inbound"
+          ? ("user" as const)
+          : ("assistant" as const),
+      content: cleanString(message.body),
+    }));
 
     const suggestion = await generateAiReply({
-      customerMessage: String(lastInboundMessage.body),
+      customerMessage: cleanString(lastInboundMessage.body),
       recentMessages,
     });
 

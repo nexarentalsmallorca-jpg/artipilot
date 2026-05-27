@@ -12,7 +12,7 @@ export default async function InboxPage() {
     try {
       initialContacts = await listContacts();
     } catch (error) {
-      console.error("InboxPage failed to load initial contacts:", error);
+      console.error("[ARTIPILOT_INBOX_PAGE] Failed to load contacts:", error);
       initialContacts = [];
     }
   }

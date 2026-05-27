@@ -23,8 +23,8 @@ function statusBadge(ok: boolean) {
 
 function statusClass(ok: boolean) {
   return ok
-    ? "bg-emerald-500/15 text-emerald-300"
-    : "bg-red-500/15 text-red-300";
+    ? "border-[#c8f7c0] bg-[#e7fce3] text-[#008069]"
+    : "border-red-200 bg-red-50 text-red-700";
 }
 
 export default function SettingsPage() {
@@ -102,19 +102,19 @@ export default function SettingsPage() {
     : [];
 
   return (
-    <div className="h-full overflow-y-auto bg-[#0b141a] px-4 py-6 text-white md:px-8">
+    <div className="h-full overflow-y-auto bg-[#f0f2f5] px-4 py-6 text-[#111b21] md:px-8">
       <div className="mx-auto max-w-4xl">
-        <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div className="mb-6 flex flex-col gap-4 rounded-3xl border border-[#d1d7db] bg-white p-5 shadow-sm md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-xs font-black uppercase tracking-[0.22em] text-[#00a884]">
+            <p className="text-xs font-black uppercase tracking-[0.22em] text-[#008069]">
               Private system
             </p>
 
-            <h1 className="mt-2 text-3xl font-black tracking-tight">
+            <h1 className="mt-2 text-3xl font-black tracking-tight text-[#111b21]">
               Settings
             </h1>
 
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-[#8696a0]">
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-[#667781]">
               Configuration overview for your private WhatsApp AI system.
               Secret values are never shown here.
             </p>
@@ -124,20 +124,20 @@ export default function SettingsPage() {
             type="button"
             onClick={() => void loadSettings()}
             disabled={loading}
-            className="rounded-full bg-[#00a884] px-5 py-3 text-sm font-black text-black transition hover:bg-[#06cf9c] disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-full bg-[#00a884] px-5 py-3 text-sm font-black text-white transition hover:bg-[#008f72] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading ? "Loading..." : "Refresh"}
           </button>
         </div>
 
         {error ? (
-          <div className="rounded-3xl border border-red-500/30 bg-red-500/10 p-5 text-sm leading-6 text-red-200">
+          <div className="mb-5 rounded-3xl border border-red-200 bg-red-50 p-5 text-sm leading-6 text-red-700 shadow-sm">
             {error}
           </div>
         ) : null}
 
         {loading && !settings ? (
-          <div className="rounded-3xl border border-white/10 bg-[#111b21] p-6 text-sm text-[#8696a0]">
+          <div className="rounded-3xl border border-[#d1d7db] bg-white p-6 text-sm text-[#667781] shadow-sm">
             Loading private dashboard settings...
           </div>
         ) : null}
@@ -147,15 +147,15 @@ export default function SettingsPage() {
             {rows.map((row) => (
               <div
                 key={row.label}
-                className="rounded-3xl border border-white/10 bg-[#111b21] p-5"
+                className="rounded-3xl border border-[#d1d7db] bg-white p-5 shadow-sm"
               >
                 <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div className="min-w-0">
-                    <h2 className="text-base font-black text-white">
+                    <h2 className="text-base font-black text-[#111b21]">
                       {row.label}
                     </h2>
 
-                    <p className="mt-1 text-sm leading-6 text-[#8696a0]">
+                    <p className="mt-1 text-sm leading-6 text-[#667781]">
                       {row.description}
                     </p>
                   </div>
@@ -163,14 +163,14 @@ export default function SettingsPage() {
                   {typeof row.ok === "boolean" ? (
                     <span
                       className={[
-                        "shrink-0 rounded-full px-3 py-1 text-xs font-black",
+                        "shrink-0 rounded-full border px-3 py-1 text-xs font-black",
                         statusClass(row.ok),
                       ].join(" ")}
                     >
                       {row.value}
                     </span>
                   ) : (
-                    <p className="max-w-full break-all rounded-2xl bg-white/[0.06] px-3 py-2 text-sm font-semibold text-slate-200 md:max-w-md">
+                    <p className="max-w-full break-all rounded-2xl bg-[#f0f2f5] px-3 py-2 text-sm font-semibold text-[#111b21] md:max-w-md">
                       {row.value}
                     </p>
                   )}
@@ -178,12 +178,12 @@ export default function SettingsPage() {
               </div>
             ))}
 
-            <div className="rounded-3xl border border-yellow-500/20 bg-yellow-500/10 p-5">
-              <h2 className="text-sm font-black text-yellow-200">
+            <div className="rounded-3xl border border-yellow-300 bg-yellow-50 p-5 shadow-sm">
+              <h2 className="text-sm font-black text-yellow-800">
                 Important
               </h2>
 
-              <p className="mt-2 text-sm leading-6 text-yellow-100/80">
+              <p className="mt-2 text-sm leading-6 text-yellow-900">
                 If you change any Vercel environment variable, redeploy the
                 project. Otherwise the dashboard may still use the old values.
               </p>

@@ -15,8 +15,10 @@ type PrivateSessionCookieOptions = {
 };
 
 function getHostnameFromRequest(request?: NextRequest) {
-  const host = request?.headers.get("host") || "";
-  return host.split(":")[0].toLowerCase();
+  const forwardedHost = request?.headers.get("x-forwarded-host") || "";
+  const host = forwardedHost || request?.headers.get("host") || "";
+
+  return host.split(":")[0].toLowerCase().trim();
 }
 
 function isLocalHostname(hostname: string) {
@@ -102,9 +104,21 @@ export async function requirePrivateSession(request: NextRequest) {
     return null;
   }
 
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  return NextResponse.json(
+    {
+      error: "Unauthorized",
+      message: "Please log in again to Artipilot private inbox.",
+    },
+    { status: 401 }
+  );
 }
 
 export function unauthorizedJson() {
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  return NextResponse.json(
+    {
+      error: "Unauthorized",
+      message: "Please log in again to Artipilot private inbox.",
+    },
+    { status: 401 }
+  );
 }

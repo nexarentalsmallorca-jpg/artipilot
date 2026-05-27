@@ -44,7 +44,11 @@ function sameMessageList(previous: Message[], next: Message[]) {
   return (
     previousLast.id === nextLast.id &&
     previousLast.status === nextLast.status &&
-    previousLast.body === nextLast.body
+    previousLast.body === nextLast.body &&
+    previousLast.created_at === nextLast.created_at &&
+    previousLast.message_type === nextLast.message_type &&
+    previousLast.media_id === nextLast.media_id &&
+    previousLast.media_url === nextLast.media_url
   );
 }
 
@@ -61,6 +65,20 @@ function sortMessages(messages: Message[]) {
   });
 }
 
+function getApiErrorMessage(payload: unknown, fallback: string) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "error" in payload &&
+    typeof payload.error === "string" &&
+    payload.error.trim()
+  ) {
+    return payload.error;
+  }
+
+  return fallback;
+}
+
 export default function InboxClient({
   initialContacts = [],
 }: {
@@ -68,9 +86,14 @@ export default function InboxClient({
 }) {
   const [contacts, setContacts] = useState<Contact[]>(initialContacts);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(
-    initialContacts[0]?.id || null
-  );
+
+  /**
+   * IMPORTANT:
+   * Keep this NULL by default.
+   * This prevents the app/PWA/mobile shortcut from auto-opening the first chat,
+   * especially your own Sahil/Sahin self-chat.
+   */
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
@@ -89,66 +112,73 @@ export default function InboxClient({
   }, [selectedId]);
 
   const selected = useMemo(() => {
-    return contacts.find((contact) => getContactKey(contact) === selectedId) || null;
+    if (!selectedId) {
+      return null;
+    }
+
+    return (
+      contacts.find((contact) => getContactKey(contact) === selectedId) || null
+    );
   }, [contacts, selectedId]);
 
-  const loadContacts = useCallback(
-    async (silent = false) => {
-      if (loadingContactsRef.current) {
+  const loadContacts = useCallback(async (silent = false) => {
+    if (loadingContactsRef.current) {
+      return;
+    }
+
+    loadingContactsRef.current = true;
+
+    try {
+      if (!silent) {
+        setLoadingContacts(true);
+      }
+
+      const result = await fetchContactsAction();
+
+      if (result.error) {
+        if (!silent) {
+          setLoadError(result.error);
+        }
+
         return;
       }
 
-      loadingContactsRef.current = true;
+      const nextContacts = result.contacts || [];
 
-      try {
-        if (!silent) {
-          setLoadingContacts(true);
+      setContacts(nextContacts);
+      setLoadError(null);
+
+      /**
+       * IMPORTANT:
+       * Do NOT auto-select the first contact.
+       * Only keep the selected chat if it still exists.
+       * If the selected chat disappears, go back to inbox list.
+       */
+      setSelectedId((currentSelectedId) => {
+        if (!currentSelectedId) {
+          return null;
         }
 
-        const result = await fetchContactsAction();
+        const stillExists = nextContacts.some(
+          (contact) => getContactKey(contact) === currentSelectedId
+        );
 
-        if (result.error) {
-          if (!silent) {
-            setLoadError(result.error);
-          }
+        return stillExists ? currentSelectedId : null;
+      });
+    } catch (error) {
+      console.error("Failed to load contacts:", error);
 
-          return;
-        }
-
-        const nextContacts = result.contacts || [];
-
-        setContacts(nextContacts);
-        setLoadError(null);
-
-        setSelectedId((currentSelectedId) => {
-          if (currentSelectedId) {
-            const stillExists = nextContacts.some(
-              (contact) => getContactKey(contact) === currentSelectedId
-            );
-
-            if (stillExists) {
-              return currentSelectedId;
-            }
-          }
-
-          return nextContacts[0]?.id || null;
-        });
-      } catch (error) {
-        console.error("Failed to load contacts:", error);
-
-        if (!silent) {
-          setLoadError("Could not load WhatsApp conversations.");
-        }
-      } finally {
-        loadingContactsRef.current = false;
-
-        if (!silent) {
-          setLoadingContacts(false);
-        }
+      if (!silent) {
+        setLoadError("Could not load WhatsApp conversations.");
       }
-    },
-    []
-  );
+    } finally {
+      loadingContactsRef.current = false;
+
+      if (!silent) {
+        setLoadingContacts(false);
+      }
+    }
+  }, []);
 
   const loadQuickReplies = useCallback(async () => {
     try {
@@ -175,14 +205,15 @@ export default function InboxClient({
       try {
         if (!silent) {
           setLoadingMessages(true);
-        }
-
-        if (!silent) {
           setMessageError(null);
         }
 
         const result = await fetchMessagesAction(contactId);
 
+        /**
+         * If user switched chat while this request was loading,
+         * do not overwrite the new selected chat messages.
+         */
         if (selectedIdRef.current !== contactId) {
           return;
         }
@@ -268,6 +299,13 @@ export default function InboxClient({
     setMessageError(null);
   }
 
+  async function handleBackToInbox() {
+    setSelectedId(null);
+    setMessages([]);
+    setMessageError(null);
+    void loadContacts(true);
+  }
+
   async function handleSend(body: string) {
     if (!selectedId) {
       throw new Error("Select a conversation first.");
@@ -285,6 +323,49 @@ export default function InboxClient({
 
     if (result.error) {
       throw new Error(result.error);
+    }
+
+    await loadMessages(activeContactId, true);
+    void loadContacts(true);
+  }
+
+  async function handleSendMedia(file: File, caption: string) {
+    if (!selectedId) {
+      throw new Error("Select a conversation first.");
+    }
+
+    if (!file) {
+      throw new Error("Select a file first.");
+    }
+
+    const activeContactId = selectedId;
+    const formData = new FormData();
+
+    formData.append("contactId", activeContactId);
+    formData.append("file", file);
+
+    if (caption.trim()) {
+      formData.append("caption", caption.trim());
+      formData.append("message", caption.trim());
+    }
+
+    const response = await fetch("/api/whatsapp/send", {
+      method: "POST",
+      body: formData,
+    });
+
+    let payload: unknown = null;
+
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        getApiErrorMessage(payload, "Could not send this file on WhatsApp.")
+      );
     }
 
     await loadMessages(activeContactId, true);
@@ -361,23 +442,23 @@ export default function InboxClient({
   }
 
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-[#0b141a] text-white">
+    <div className="flex h-[100dvh] overflow-hidden bg-[#efeae2] text-[#111b21]">
       <aside
         className={[
-          "h-full border-r border-white/10 bg-[#111b21]",
-          "w-full shrink-0 md:w-96 lg:w-[390px]",
+          "h-full shrink-0 border-r border-[#d1d7db] bg-white",
+          "w-full md:w-96 lg:w-[410px]",
           selected ? "hidden md:block" : "block",
         ].join(" ")}
       >
         <div className="flex h-full flex-col">
           {loadError ? (
-            <div className="border-b border-red-500/30 bg-red-500/10 px-4 py-3 text-xs leading-5 text-red-200">
+            <div className="border-b border-red-200 bg-red-50 px-4 py-3 text-xs leading-5 text-red-700">
               {loadError}
             </div>
           ) : null}
 
           {loadingContacts && contacts.length === 0 ? (
-            <div className="border-b border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-slate-400">
+            <div className="border-b border-[#e9edef] bg-[#f0f2f5] px-4 py-3 text-xs text-[#667781]">
               Loading WhatsApp conversations...
             </div>
           ) : null}
@@ -394,33 +475,34 @@ export default function InboxClient({
         </div>
       </aside>
 
-      <section
+      <main
         className={[
-          "min-w-0 flex-1 flex-col bg-[#0b141a]",
+          "min-w-0 flex-1 flex-col bg-[#efeae2]",
           selected ? "flex" : "hidden md:flex",
         ].join(" ")}
       >
         {messageError ? (
-          <div className="border-b border-red-500/30 bg-red-500/10 px-4 py-3 text-xs leading-5 text-red-200">
+          <div className="border-b border-red-200 bg-red-50 px-4 py-3 text-xs leading-5 text-red-700">
             {messageError}
           </div>
         ) : null}
 
         {selected ? (
-          <div className="flex items-center gap-3 border-b border-white/10 bg-[#202c33] px-3 py-2 md:hidden">
+          <div className="flex items-center gap-3 border-b border-[#d1d7db] bg-[#f0f2f5] px-3 py-2 md:hidden">
             <button
               type="button"
-              onClick={() => setSelectedId(null)}
-              className="rounded-full border border-white/10 bg-white/10 px-3 py-2 text-xs font-semibold text-white"
+              onClick={() => void handleBackToInbox()}
+              className="flex h-9 w-9 items-center justify-center rounded-full text-xl font-semibold text-[#54656f] hover:bg-[#e9edef]"
+              aria-label="Back to chats"
             >
-              Back
+              ‹
             </button>
 
-            <div className="min-w-0">
-              <p className="truncate text-sm font-bold">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold text-[#111b21]">
                 {selected.name || selected.profile_name || selected.phone}
               </p>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-[#667781]">
                 AI {selected.ai_enabled ? "on" : "off"}
               </p>
             </div>
@@ -441,23 +523,24 @@ export default function InboxClient({
           quickReplies={quickReplies}
           onSend={handleSend}
           onAiSuggest={handleAiSuggest}
+          onSendMedia={handleSendMedia}
         />
-      </section>
+      </main>
 
       {!selected ? (
-        <section className="hidden min-w-0 flex-1 items-center justify-center bg-[#0b141a] px-6 text-center md:flex">
+        <section className="hidden min-w-0 flex-1 items-center justify-center bg-[#f0f2f5] px-6 text-center md:flex">
           <div className="max-w-sm">
-            <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/10 text-2xl font-black text-emerald-300">
+            <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-[#00a884]/10 text-2xl font-black text-[#00a884]">
               A
             </div>
 
-            <h1 className="text-2xl font-black tracking-tight">
-              Artipilot WhatsApp AI
+            <h1 className="text-2xl font-semibold tracking-tight text-[#111b21]">
+              Artipilot Private Inbox
             </h1>
 
-            <p className="mt-3 text-sm leading-6 text-slate-400">
-              Select a conversation to view messages, send manual replies, or
-              control AI automatic replies for that contact.
+            <p className="mt-3 text-sm leading-6 text-[#667781]">
+              Select a WhatsApp conversation to view messages, send manual
+              replies, or control AI automatic replies for that customer.
             </p>
           </div>
         </section>

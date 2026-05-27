@@ -99,31 +99,31 @@ export default function QuickRepliesPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-[#0b141a] px-4 py-6 text-white md:px-8">
+    <div className="h-full overflow-y-auto bg-[#f0f2f5] px-4 py-6 text-[#111b21] md:px-8">
       <div className="mx-auto max-w-4xl">
-        <div className="mb-6">
-          <p className="text-xs font-black uppercase tracking-[0.22em] text-[#00a884]">
+        <div className="mb-6 rounded-3xl border border-[#d1d7db] bg-white p-5 shadow-sm">
+          <p className="text-xs font-black uppercase tracking-[0.22em] text-[#008069]">
             Private system
           </p>
 
-          <h1 className="mt-2 text-3xl font-black tracking-tight">
+          <h1 className="mt-2 text-3xl font-black tracking-tight text-[#111b21]">
             Quick Replies
           </h1>
 
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-[#8696a0]">
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-[#667781]">
             Save common WhatsApp replies so you can insert them quickly inside
             the inbox.
           </p>
         </div>
 
         {error ? (
-          <div className="mb-4 rounded-3xl border border-red-500/30 bg-red-500/10 p-4 text-sm leading-6 text-red-200">
+          <div className="mb-4 rounded-3xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-700 shadow-sm">
             {error}
           </div>
         ) : null}
 
         {success ? (
-          <div className="mb-4 rounded-3xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm leading-6 text-emerald-200">
+          <div className="mb-4 rounded-3xl border border-[#c8f7c0] bg-[#e7fce3] p-4 text-sm leading-6 text-[#008069] shadow-sm">
             {success}
           </div>
         ) : null}
@@ -131,13 +131,13 @@ export default function QuickRepliesPage() {
         <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
           <form
             onSubmit={(event) => void handleAdd(event)}
-            className="rounded-3xl border border-white/10 bg-[#111b21] p-5"
+            className="rounded-3xl border border-[#d1d7db] bg-white p-5 shadow-sm"
           >
-            <h2 className="text-lg font-black text-white">
+            <h2 className="text-lg font-black text-[#111b21]">
               Add quick reply
             </h2>
 
-            <p className="mt-2 text-sm leading-6 text-[#8696a0]">
+            <p className="mt-2 text-sm leading-6 text-[#667781]">
               Example: price info, license requirement, deposit, location, or
               booking link.
             </p>
@@ -146,7 +146,7 @@ export default function QuickRepliesPage() {
               <div>
                 <label
                   htmlFor="quick-title"
-                  className="block text-sm font-bold text-slate-200"
+                  className="block text-sm font-bold text-[#111b21]"
                 >
                   Title
                 </label>
@@ -157,14 +157,14 @@ export default function QuickRepliesPage() {
                   onChange={(event) => setTitle(event.target.value)}
                   placeholder="Example: Booking link"
                   required
-                  className="mt-2 w-full rounded-2xl border border-white/10 bg-[#0b141a] px-4 py-3 text-sm text-white outline-none transition placeholder:text-[#8696a0] focus:border-[#00a884]/70 focus:ring-4 focus:ring-[#00a884]/10"
+                  className="mt-2 w-full rounded-2xl border border-[#d1d7db] bg-[#f0f2f5] px-4 py-3 text-sm text-[#111b21] outline-none transition placeholder:text-[#667781] focus:border-[#00a884] focus:bg-white focus:ring-4 focus:ring-[#00a884]/10"
                 />
               </div>
 
               <div>
                 <label
                   htmlFor="quick-content"
-                  className="block text-sm font-bold text-slate-200"
+                  className="block text-sm font-bold text-[#111b21]"
                 >
                   Message content
                 </label>
@@ -176,27 +176,28 @@ export default function QuickRepliesPage() {
                   placeholder="Write the WhatsApp message here..."
                   required
                   rows={5}
-                  className="mt-2 w-full resize-none rounded-2xl border border-white/10 bg-[#0b141a] px-4 py-3 text-sm leading-6 text-white outline-none transition placeholder:text-[#8696a0] focus:border-[#00a884]/70 focus:ring-4 focus:ring-[#00a884]/10"
+                  className="mt-2 w-full resize-none rounded-2xl border border-[#d1d7db] bg-[#f0f2f5] px-4 py-3 text-sm leading-6 text-[#111b21] outline-none transition placeholder:text-[#667781] focus:border-[#00a884] focus:bg-white focus:ring-4 focus:ring-[#00a884]/10"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={saving}
-                className="w-full rounded-2xl bg-[#00a884] px-4 py-3 text-sm font-black text-black transition hover:bg-[#06cf9c] disabled:cursor-not-allowed disabled:opacity-50"
+                className="w-full rounded-2xl bg-[#00a884] px-4 py-3 text-sm font-black text-white transition hover:bg-[#008f72] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {saving ? "Saving..." : "Add quick reply"}
               </button>
             </div>
           </form>
 
-          <section className="rounded-3xl border border-white/10 bg-[#111b21] p-5">
+          <section className="rounded-3xl border border-[#d1d7db] bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-black text-white">
+                <h2 className="text-lg font-black text-[#111b21]">
                   Saved replies
                 </h2>
-                <p className="mt-1 text-sm text-[#8696a0]">
+
+                <p className="mt-1 text-sm text-[#667781]">
                   {items.length} quick replies saved
                 </p>
               </div>
@@ -205,29 +206,29 @@ export default function QuickRepliesPage() {
                 type="button"
                 onClick={() => void loadQuickReplies()}
                 disabled={loading}
-                className="rounded-full bg-white/[0.06] px-4 py-2 text-xs font-black text-[#8696a0] transition hover:bg-white/[0.1] hover:text-white disabled:opacity-50"
+                className="rounded-full bg-[#f0f2f5] px-4 py-2 text-xs font-black text-[#54656f] transition hover:bg-[#e9edef] hover:text-[#111b21] disabled:opacity-50"
               >
                 {loading ? "Loading..." : "Refresh"}
               </button>
             </div>
 
             {loading && items.length === 0 ? (
-              <div className="rounded-2xl bg-white/[0.04] p-5 text-sm text-[#8696a0]">
+              <div className="rounded-2xl bg-[#f0f2f5] p-5 text-sm text-[#667781]">
                 Loading quick replies...
               </div>
             ) : null}
 
             {!loading && items.length === 0 ? (
-              <div className="rounded-2xl bg-white/[0.04] p-5 text-center">
-                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-[#00a884]/10 text-xl">
+              <div className="rounded-2xl bg-[#f0f2f5] p-5 text-center">
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-[#d9fdd3] text-xl">
                   ⚡
                 </div>
 
-                <h3 className="font-black text-white">
+                <h3 className="font-black text-[#111b21]">
                   No quick replies yet
                 </h3>
 
-                <p className="mt-2 text-sm leading-6 text-[#8696a0]">
+                <p className="mt-2 text-sm leading-6 text-[#667781]">
                   Add your first quick reply and it will appear inside the
                   message composer.
                 </p>
@@ -239,13 +240,13 @@ export default function QuickRepliesPage() {
                 {items.map((item) => (
                   <article
                     key={item.id}
-                    className="rounded-2xl border border-white/10 bg-[#0b141a] p-4"
+                    className="rounded-2xl border border-[#e9edef] bg-[#f0f2f5] p-4"
                   >
-                    <h3 className="text-sm font-black text-white">
+                    <h3 className="text-sm font-black text-[#111b21]">
                       {item.title}
                     </h3>
 
-                    <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-[#8696a0]">
+                    <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-[#54656f]">
                       {item.content}
                     </p>
                   </article>

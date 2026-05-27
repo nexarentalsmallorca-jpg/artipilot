@@ -10,6 +10,9 @@ export type Message = {
   body: string | null;
   status: string | null;
   created_at: string;
+  message_type?: string | null;
+  media_id?: string | null;
+  media_url?: string | null;
 };
 
 function displayName(contact: Contact) {
@@ -121,6 +124,147 @@ function isNearBottom(element: HTMLDivElement | null) {
     element.scrollHeight - element.scrollTop - element.clientHeight;
 
   return distanceFromBottom < 180;
+}
+
+function normalizeMessageType(message: Message) {
+  const type = String(message.message_type || "text").toLowerCase();
+
+  if (
+    type === "image" ||
+    type === "video" ||
+    type === "document" ||
+    type === "audio" ||
+    type === "sticker" ||
+    type === "location" ||
+    type === "contacts" ||
+    type === "system" ||
+    type === "text"
+  ) {
+    return type;
+  }
+
+  return "text";
+}
+
+function getFileNameFromUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    const lastPart = parsed.pathname.split("/").filter(Boolean).pop();
+
+    return decodeURIComponent(lastPart || "File");
+  } catch {
+    return "File";
+  }
+}
+
+function linkifyText(text: string) {
+  const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
+  const parts = text.split(urlRegex);
+
+  return parts.map((part, index) => {
+    const isUrl = /^(https?:\/\/|www\.)/i.test(part);
+
+    if (!isUrl) {
+      return <span key={`${part}-${index}`}>{part}</span>;
+    }
+
+    const href = part.startsWith("http") ? part : `https://${part}`;
+
+    return (
+      <a
+        key={`${part}-${index}`}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="font-semibold text-[#027eb5] underline decoration-[#027eb5]/40 underline-offset-2"
+      >
+        {part}
+      </a>
+    );
+  });
+}
+
+function MediaContent({ message }: { message: Message }) {
+  const type = normalizeMessageType(message);
+  const mediaUrl = message.media_url || "";
+  const body = message.body || "";
+
+  if (!mediaUrl) {
+    if (type !== "text" && type !== "system") {
+      return (
+        <div className="rounded-xl bg-black/5 px-3 py-2 text-sm text-[#667781]">
+          {body || `${type} message`}
+        </div>
+      );
+    }
+
+    return null;
+  }
+
+  if (type === "image" || type === "sticker") {
+    return (
+      <a
+        href={mediaUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block overflow-hidden rounded-xl"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={mediaUrl}
+          alt={body || "WhatsApp image"}
+          className="max-h-[360px] w-full max-w-[320px] rounded-xl object-cover"
+          loading="lazy"
+        />
+      </a>
+    );
+  }
+
+  if (type === "video") {
+    return (
+      <video
+        src={mediaUrl}
+        controls
+        className="max-h-[360px] w-full max-w-[340px] rounded-xl bg-black"
+      />
+    );
+  }
+
+  if (type === "audio") {
+    return (
+      <div className="rounded-xl bg-white/70 p-2">
+        <audio src={mediaUrl} controls className="w-full max-w-[320px]" />
+      </div>
+    );
+  }
+
+  if (type === "document") {
+    const fileName = body || getFileNameFromUrl(mediaUrl);
+
+    return (
+      <a
+        href={mediaUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex max-w-[340px] items-center gap-3 rounded-xl bg-white/75 p-3 transition hover:bg-white"
+      >
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#f0f2f5] text-xl">
+          📄
+        </span>
+
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-bold text-[#111b21]">
+            {fileName}
+          </span>
+          <span className="mt-0.5 block text-xs text-[#667781]">
+            Open file
+          </span>
+        </span>
+      </a>
+    );
+  }
+
+  return null;
 }
 
 export default function ChatWindow({
@@ -240,17 +384,17 @@ export default function ChatWindow({
 
   if (!contact) {
     return (
-      <div className="flex h-full flex-1 items-center justify-center bg-[#0b141a] px-6 text-center text-[#8696a0]">
+      <div className="flex h-full flex-1 items-center justify-center bg-[#f0f2f5] px-6 text-center text-[#667781]">
         <div className="max-w-sm">
           <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-[#00a884]/10 text-2xl font-black text-[#00a884]">
             A
           </div>
 
-          <h2 className="text-xl font-black text-white">
+          <h2 className="text-xl font-bold text-[#111b21]">
             Select a conversation
           </h2>
 
-          <p className="mt-3 text-sm leading-6 text-[#8696a0]">
+          <p className="mt-3 text-sm leading-6 text-[#667781]">
             Choose a WhatsApp chat from the left side to view messages, send a
             manual reply, or control AI automatic replies.
           </p>
@@ -260,49 +404,63 @@ export default function ChatWindow({
   }
 
   return (
-    <div className="flex h-full flex-1 flex-col bg-[#0b141a]">
-      <header className="hidden items-center justify-between border-b border-white/10 bg-[#202c33] px-4 py-3 md:flex">
+    <div className="flex h-full flex-1 flex-col bg-[#efeae2]">
+      <header className="hidden items-center justify-between border-b border-[#d1d7db] bg-[#f0f2f5] px-4 py-2.5 md:flex">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#00a884]/15 text-base font-black text-[#00a884]">
+          <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#dfe5e7] text-base font-bold text-[#54656f]">
             {getInitial(contact)}
+
             <span
               className={[
-                "absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-[#202c33]",
+                "absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-[#f0f2f5]",
                 contact.ai_enabled ? "bg-[#00a884]" : "bg-[#8696a0]",
               ].join(" ")}
+              title={contact.ai_enabled ? "AI On" : "AI Off"}
             />
           </div>
 
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-black text-white">
+            <h2 className="truncate text-sm font-semibold text-[#111b21]">
               {displayName(contact)}
             </h2>
-            <p className="truncate text-xs text-[#8696a0]">{contact.phone}</p>
+
+            <p className="truncate text-xs text-[#667781]">{contact.phone}</p>
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={onToggleAi}
-          className={[
-            "rounded-full px-4 py-2 text-xs font-black transition active:scale-[0.98]",
-            contact.ai_enabled
-              ? "bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/20"
-              : "bg-white/10 text-[#8696a0] hover:bg-white/15 hover:text-white",
-          ].join(" ")}
-          title={
-            contact.ai_enabled
-              ? "AI auto-replies are active for this contact"
-              : "AI auto-replies are off for this contact"
-          }
-        >
-          AI {contact.ai_enabled ? "ON" : "OFF"}
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={onToggleAi}
+            className={[
+              "rounded-full px-4 py-2 text-xs font-bold transition active:scale-[0.98]",
+              contact.ai_enabled
+                ? "bg-[#d9fdd3] text-[#008069] hover:bg-[#c8f7c0]"
+                : "bg-[#e9edef] text-[#54656f] hover:bg-[#dce1e3]",
+            ].join(" ")}
+            title={
+              contact.ai_enabled
+                ? "AI auto-replies are active for this contact"
+                : "AI auto-replies are off for this contact"
+            }
+          >
+            AI {contact.ai_enabled ? "ON" : "OFF"}
+          </button>
+
+          <button
+            type="button"
+            className="flex h-9 w-9 items-center justify-center rounded-full text-[#54656f] transition hover:bg-[#e9edef]"
+            title="Chat options"
+            aria-label="Chat options"
+          >
+            ⋮
+          </button>
+        </div>
       </header>
 
       <div className="relative min-h-0 flex-1">
         {loading && messages.length > 0 ? (
-          <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded-full border border-white/10 bg-[#202c33]/95 px-3 py-1 text-[11px] font-bold text-[#8696a0] shadow-lg">
+          <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded-full border border-[#d1d7db] bg-white/95 px-3 py-1 text-[11px] font-bold text-[#667781] shadow-lg">
             Syncing...
           </div>
         ) : null}
@@ -314,7 +472,7 @@ export default function ChatWindow({
               setShowNewMessagesButton(false);
               scrollToBottom("smooth");
             }}
-            className="absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full bg-[#00a884] px-4 py-2 text-xs font-black text-[#001f19] shadow-lg transition hover:bg-[#21c79b] active:scale-[0.98]"
+            className="absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full bg-[#00a884] px-4 py-2 text-xs font-bold text-white shadow-lg transition hover:bg-[#008f72] active:scale-[0.98]"
           >
             New messages ↓
           </button>
@@ -323,27 +481,27 @@ export default function ChatWindow({
         <div
           ref={scrollContainerRef}
           onScroll={handleScroll}
-          className="h-full overflow-y-auto bg-[#0b141a] bg-[radial-gradient(circle_at_top_left,rgba(0,168,132,0.08),transparent_35%),radial-gradient(circle_at_bottom_right,rgba(255,255,255,0.04),transparent_35%)] px-3 py-4 md:px-5"
+          className="h-full overflow-y-auto bg-[#efeae2] px-3 py-4 md:px-8"
         >
           {shouldShowFullLoading ? (
             <div className="flex h-full items-center justify-center text-center">
               <div>
-                <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-white/10 border-t-[#00a884]" />
-                <p className="text-sm text-[#8696a0]">Loading messages...</p>
+                <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-[#d1d7db] border-t-[#00a884]" />
+                <p className="text-sm text-[#667781]">Loading messages...</p>
               </div>
             </div>
           ) : messages.length === 0 ? (
             <div className="flex h-full items-center justify-center px-6 text-center">
-              <div className="max-w-sm rounded-3xl border border-white/10 bg-[#202c33]/70 p-6">
-                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-[#00a884]/10 text-xl">
+              <div className="max-w-sm rounded-3xl border border-[#d1d7db] bg-white/80 p-6 shadow-sm">
+                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-[#d9fdd3] text-xl">
                   💬
                 </div>
 
-                <h3 className="text-base font-black text-white">
+                <h3 className="text-base font-bold text-[#111b21]">
                   No messages yet
                 </h3>
 
-                <p className="mt-2 text-sm leading-6 text-[#8696a0]">
+                <p className="mt-2 text-sm leading-6 text-[#667781]">
                   When this contact sends a WhatsApp message, it will appear
                   here.
                 </p>
@@ -357,12 +515,16 @@ export default function ChatWindow({
                 const senderLabel = getSenderLabel(message);
                 const statusLabel = getStatusLabel(message.status);
                 const timeLabel = formatMessageTime(message.created_at);
+                const isSystem = message.sender_type === "system";
+                const isFailed = message.status?.toLowerCase() === "failed";
+                const hasMedia = Boolean(message.media_url);
+                const type = normalizeMessageType(message);
 
                 return (
                   <div key={message.id}>
                     {showDateLabel ? (
                       <div className="my-4 flex justify-center">
-                        <span className="rounded-full bg-[#202c33]/90 px-3 py-1 text-[11px] font-bold text-[#8696a0] shadow">
+                        <span className="rounded-lg bg-white/90 px-3 py-1 text-[11px] font-semibold text-[#667781] shadow-sm">
                           {dateLabel}
                         </span>
                       </div>
@@ -371,40 +533,65 @@ export default function ChatWindow({
                     <div
                       className={[
                         "flex w-full",
-                        outbound ? "justify-end" : "justify-start",
+                        isSystem
+                          ? "justify-center"
+                          : outbound
+                            ? "justify-end"
+                            : "justify-start",
                       ].join(" ")}
                     >
                       <div
                         className={[
-                          "max-w-[82%] rounded-2xl px-3 py-2 text-sm shadow-sm md:max-w-[72%]",
-                          outbound
-                            ? "rounded-tr-md bg-[#005c4b] text-white"
-                            : "rounded-tl-md bg-[#202c33] text-[#e9edef]",
-                          message.sender_type === "system"
-                            ? "mx-auto rounded-2xl bg-white/10 text-center text-[#8696a0]"
-                            : "",
+                          "max-w-[86%] px-3 py-2 text-sm shadow-sm md:max-w-[74%]",
+                          isSystem
+                            ? "rounded-xl bg-white/80 text-center text-[#667781]"
+                            : outbound
+                              ? "rounded-2xl rounded-tr-md bg-[#d9fdd3] text-[#111b21]"
+                              : "rounded-2xl rounded-tl-md bg-white text-[#111b21]",
+                          isFailed ? "border border-red-200 bg-red-50" : "",
+                          hasMedia ? "min-w-[230px]" : "",
                         ].join(" ")}
                       >
                         {senderLabel ? (
                           <span
                             className={[
-                              "mb-1 block text-[10px] font-black uppercase tracking-wide",
+                              "mb-1 block text-[10px] font-bold uppercase tracking-wide",
                               message.sender_type === "ai"
-                                ? "text-emerald-300"
+                                ? "text-[#008069]"
                                 : message.sender_type === "admin"
-                                  ? "text-sky-300"
-                                  : "text-[#8696a0]",
+                                  ? "text-[#0b72b9]"
+                                  : "text-[#667781]",
                             ].join(" ")}
                           >
                             {senderLabel}
                           </span>
                         ) : null}
 
-                        <p className="whitespace-pre-wrap break-words leading-6">
-                          {body || " "}
-                        </p>
+                        <MediaContent message={message} />
 
-                        <div className="mt-1 flex items-center justify-end gap-1 text-[10px] opacity-70">
+                        {body && !(hasMedia && type === "document") ? (
+                          <p
+                            className={[
+                              "whitespace-pre-wrap break-words leading-6",
+                              hasMedia ? "mt-2" : "",
+                            ].join(" ")}
+                          >
+                            {linkifyText(body)}
+                          </p>
+                        ) : null}
+
+                        {!body && !hasMedia ? (
+                          <p className="whitespace-pre-wrap break-words leading-6">
+                            {" "}
+                          </p>
+                        ) : null}
+
+                        <div
+                          className={[
+                            "mt-1 flex items-center justify-end gap-1 text-[10px]",
+                            isFailed ? "text-red-600" : "text-[#667781]",
+                          ].join(" ")}
+                        >
                           {timeLabel ? <span>{timeLabel}</span> : null}
                           {statusLabel ? <span>· {statusLabel}</span> : null}
                         </div>

@@ -15,7 +15,7 @@ export async function assertPrivateSessionServer() {
   const isValid = await hasPrivateSessionServer();
 
   if (!isValid) {
-    throw new Error("Unauthorized. Please log in again.");
+    throw new Error("Unauthorized. Please log in again to Artipilot private inbox.");
   }
 
   return true;

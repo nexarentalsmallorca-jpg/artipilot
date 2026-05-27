@@ -1,6 +1,8 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 let adminClient: SupabaseClient | null = null;
+let cachedUrl = "";
+let cachedServiceRoleKey = "";
 
 function cleanEnv(value: string | undefined) {
   return String(value || "").trim();
@@ -21,6 +23,8 @@ export function getSupabaseConfig() {
     url,
     serviceRoleKey,
     configured: Boolean(url && serviceRoleKey),
+    urlPreview: url ? `${url.slice(0, 28)}...` : null,
+    hasServiceRoleKey: Boolean(serviceRoleKey),
   };
 }
 
@@ -33,7 +37,13 @@ export function getSupabaseAdmin(): SupabaseClient {
     );
   }
 
-  if (!adminClient) {
+  const configChanged =
+    adminClient && (cachedUrl !== url || cachedServiceRoleKey !== serviceRoleKey);
+
+  if (!adminClient || configChanged) {
+    cachedUrl = url;
+    cachedServiceRoleKey = serviceRoleKey;
+
     adminClient = createClient(url, serviceRoleKey, {
       auth: {
         persistSession: false,
@@ -53,4 +63,6 @@ export function getSupabaseAdmin(): SupabaseClient {
 
 export function resetSupabaseAdminClientForTests() {
   adminClient = null;
+  cachedUrl = "";
+  cachedServiceRoleKey = "";
 }
