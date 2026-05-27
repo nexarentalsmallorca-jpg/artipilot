@@ -16,6 +16,10 @@ const NAV = [
   { href: "/dashboard/status", label: "System Status", shortLabel: "Status" },
 ];
 
+const PUSH_SW_URL = "/artipilot-push-sw.js";
+const PUSH_SW_SCOPE = "/";
+const PUSH_SUBSCRIPTION_API = "/api/private/push-subscription";
+
 type PushStatus =
   | "checking"
   | "unsupported"
@@ -26,13 +30,18 @@ type PushStatus =
   | "saving"
   | "error";
 
+type PushApiResponse = {
+  ok?: boolean;
+  error?: string;
+  subscription?: unknown;
+};
+
 function isActivePath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
 function getPageTitle(pathname: string) {
   const activeItem = NAV.find((item) => isActivePath(pathname, item.href));
-
   return activeItem?.label || "Artipilot Private";
 }
 
@@ -56,10 +65,6 @@ function urlBase64ToUint8Array(base64String: string) {
   return outputArray;
 }
 
-function getSubscriptionEndpoint(subscription: PushSubscription | null) {
-  return subscription?.endpoint || "";
-}
-
 function getPushErrorMessage(payload: unknown, fallback: string) {
   if (
     payload &&
@@ -72,6 +77,15 @@ function getPushErrorMessage(payload: unknown, fallback: string) {
   }
 
   return fallback;
+}
+
+
+async function parseJsonSafely(response: Response): Promise<PushApiResponse> {
+  try {
+    return (await response.json()) as PushApiResponse;
+  } catch {
+    return {};
+  }
 }
 
 function NotificationButton() {
@@ -89,44 +103,67 @@ function NotificationButton() {
       throw new Error("Service workers are not supported on this device.");
     }
 
-    const existing = await navigator.serviceWorker.getRegistration(
-      "/artipilot-push-sw.js"
+    let registration = await navigator.serviceWorker.getRegistration(
+      PUSH_SW_SCOPE
     );
 
-    if (existing) {
-      return existing;
+    if (!registration || !registration.active) {
+      registration = await navigator.serviceWorker.register(PUSH_SW_URL, {
+        scope: PUSH_SW_SCOPE,
+        updateViaCache: "none",
+      });
+    } else {
+      try {
+        await registration.update();
+      } catch (error) {
+        console.warn("[ARTIPILOT_PUSH_SW_UPDATE_FAILED]", error);
+      }
     }
 
-    return navigator.serviceWorker.register("/artipilot-push-sw.js", {
-      scope: "/",
-    });
+    await navigator.serviceWorker.ready;
+
+    return registration;
   }
 
   async function saveSubscription(subscription: PushSubscription) {
-    const response = await fetch("/api/private/push-subscription", {
+    const response = await fetch(PUSH_SUBSCRIPTION_API, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
+      cache: "no-store",
       body: JSON.stringify({
         ...subscription.toJSON(),
         userAgent: navigator.userAgent,
       }),
     });
 
-    let payload: unknown = null;
+    const payload = await parseJsonSafely(response);
 
-    try {
-      payload = await response.json();
-    } catch {
-      payload = null;
-    }
-
-    if (!response.ok) {
+    if (!response.ok || payload.ok === false) {
       throw new Error(
         getPushErrorMessage(payload, "Could not save notification subscription.")
       );
     }
+
+    return payload;
+  }
+
+  async function checkServerSubscriptionStatus() {
+    const response = await fetch(PUSH_SUBSCRIPTION_API, {
+      method: "GET",
+      cache: "no-store",
+    });
+
+    const payload = await parseJsonSafely(response);
+
+    if (!response.ok || payload.ok === false) {
+      throw new Error(
+        getPushErrorMessage(payload, "Could not check saved subscriptions.")
+      );
+    }
+
+    return payload;
   }
 
   async function checkNotificationStatus() {
@@ -158,20 +195,29 @@ function NotificationButton() {
       return;
     }
 
+    if (Notification.permission !== "granted") {
+      setStatus("ready");
+      setMessage("Enable phone notifications for new WhatsApp messages.");
+      return;
+    }
+
     try {
       const registration = await getRegistration();
       const subscription = await registration.pushManager.getSubscription();
 
-      if (getSubscriptionEndpoint(subscription)) {
-        setStatus("enabled");
-        setMessage("Phone notifications are enabled.");
-        return;
-      }
+     if (!subscription) {
+  setStatus("ready");
+  setMessage("Enable phone notifications for new WhatsApp messages.");
+  return;
+}
 
-      setStatus("ready");
-      setMessage("Enable phone notifications for new WhatsApp messages.");
+await saveSubscription(subscription);
+await checkServerSubscriptionStatus();
+
+      setStatus("enabled");
+      setMessage("Notifications are enabled and saved.");
     } catch (error) {
-      console.error("Notification status check failed:", error);
+      console.error("[ARTIPILOT_PUSH_STATUS_CHECK_FAILED]", error);
       setStatus("error");
       setMessage(
         error instanceof Error
@@ -193,6 +239,14 @@ function NotificationButton() {
     try {
       if (!("Notification" in window)) {
         throw new Error("Notifications are not supported on this browser.");
+      }
+
+      if (!("serviceWorker" in navigator)) {
+        throw new Error("Service workers are not supported on this device.");
+      }
+
+      if (!("PushManager" in window)) {
+        throw new Error("Push notifications are not supported on this browser.");
       }
 
       if (!vapidPublicKey) {
@@ -223,16 +277,64 @@ function NotificationButton() {
       }
 
       await saveSubscription(subscription);
+      await checkServerSubscriptionStatus();
 
       setStatus("enabled");
-      setMessage("Phone notifications are enabled.");
+      setMessage("Notifications are enabled and saved.");
     } catch (error) {
-      console.error("Enable notifications failed:", error);
+      console.error("[ARTIPILOT_PUSH_ENABLE_FAILED]", error);
       setStatus("error");
       setMessage(
         error instanceof Error
           ? error.message
           : "Could not enable notifications."
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resetNotifications() {
+    if (busy) {
+      return;
+    }
+
+    setBusy(true);
+    setStatus("saving");
+    setMessage("Resetting notifications...");
+
+    try {
+      const registration = await getRegistration();
+      const subscription = await registration.pushManager.getSubscription();
+
+      if (subscription) {
+        try {
+          await fetch(PUSH_SUBSCRIPTION_API, {
+            method: "DELETE",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            cache: "no-store",
+            body: JSON.stringify({
+              endpoint: subscription.endpoint,
+            }),
+          });
+        } catch (error) {
+          console.warn("[ARTIPILOT_PUSH_DELETE_REMOTE_FAILED]", error);
+        }
+
+        await subscription.unsubscribe();
+      }
+
+      setStatus("ready");
+      setMessage("Notifications were reset. Enable again to create a fresh subscription.");
+    } catch (error) {
+      console.error("[ARTIPILOT_PUSH_RESET_FAILED]", error);
+      setStatus("error");
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not reset notifications."
       );
     } finally {
       setBusy(false);
@@ -268,7 +370,7 @@ function NotificationButton() {
 
         <div className="min-w-0 flex-1">
           <p className="text-xs font-black text-[#111b21]">
-            Phone notifications
+            Browser notifications
           </p>
 
           <p className="mt-1 text-[11px] leading-5 text-[#667781]">
@@ -292,11 +394,22 @@ function NotificationButton() {
             {status === "checking"
               ? "Checking..."
               : status === "saving"
-                ? "Enabling..."
+                ? "Working..."
                 : isEnabled
                   ? "Enabled"
                   : "Enable"}
           </button>
+
+          {(isEnabled || status === "error") && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void resetNotifications()}
+              className="mt-2 w-full rounded-xl bg-white px-3 py-2 text-xs font-black text-[#54656f] transition hover:bg-[#eef0f1] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Reset notifications
+            </button>
+          )}
         </div>
       </div>
     </div>

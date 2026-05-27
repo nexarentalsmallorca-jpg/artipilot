@@ -9,8 +9,23 @@ import { getSupabaseAdmin, isSupabaseConfigured } from "@/lib/supabase/admin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type PushSubscriptionRow = {
+  id: string;
+  endpoint: string | null;
+  p256dh: string | null;
+  auth: string | null;
+  user_agent: string | null;
+  enabled: boolean | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
 function isEnvSet(name: string) {
   return Boolean(process.env[name]?.trim());
+}
+
+function cleanString(value: unknown): string {
+  return String(value || "").trim();
 }
 
 function getErrorMessage(error: unknown) {
@@ -52,6 +67,34 @@ function isSchemaError(error: unknown) {
   );
 }
 
+function maskEndpoint(endpoint: string | null | undefined): string {
+  const cleanEndpoint = cleanString(endpoint);
+
+  if (!cleanEndpoint) {
+    return "";
+  }
+
+  if (cleanEndpoint.length <= 32) {
+    return cleanEndpoint;
+  }
+
+  return `${cleanEndpoint.slice(0, 22)}...${cleanEndpoint.slice(-10)}`;
+}
+
+function formatPushSubscriptionForDebug(row: PushSubscriptionRow) {
+  return {
+    id: row.id,
+    endpoint: maskEndpoint(row.endpoint),
+    hasEndpoint: Boolean(cleanString(row.endpoint)),
+    hasP256dh: Boolean(cleanString(row.p256dh)),
+    hasAuth: Boolean(cleanString(row.auth)),
+    enabled: row.enabled === true,
+    userAgent: row.user_agent || "Unknown browser",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 async function getTableCount(tableName: string) {
   try {
     if (!isSupabaseConfigured()) {
@@ -79,31 +122,62 @@ async function getTableCount(tableName: string) {
   }
 }
 
-async function getEnabledPushSubscriptionCount() {
+async function getPushSubscriptionsDebug() {
+  const emptyResult = {
+    totalPushSubscriptions: 0,
+    enabledPushSubscriptions: 0,
+    validPushSubscriptions: 0,
+    pushSubscriptions: [] as ReturnType<typeof formatPushSubscriptionForDebug>[],
+  };
+
   try {
     if (!isSupabaseConfigured()) {
-      return 0;
+      return emptyResult;
     }
 
     const db = getSupabaseAdmin();
 
-    const { count, error } = await db
+    const { data, error } = await db
       .from("artipilot_push_subscriptions")
-      .select("*", { count: "exact", head: true })
-      .eq("enabled", true);
+      .select(
+        "id, endpoint, p256dh, auth, user_agent, enabled, created_at, updated_at"
+      )
+      .order("updated_at", { ascending: false })
+      .limit(25);
 
     if (error) {
       if (!isSchemaError(error)) {
-        console.error("[ARTIPILOT_STATUS] Push count error:", error);
+        console.error("[ARTIPILOT_STATUS] Push debug error:", error);
       }
 
-      return 0;
+      return emptyResult;
     }
 
-    return count ?? 0;
+    const rows = (data || []) as PushSubscriptionRow[];
+
+    const pushSubscriptions = rows.map(formatPushSubscriptionForDebug);
+
+    const enabledPushSubscriptions = pushSubscriptions.filter(
+      (subscription) => subscription.enabled
+    ).length;
+
+    const validPushSubscriptions = pushSubscriptions.filter(
+      (subscription) =>
+        subscription.enabled &&
+        subscription.hasEndpoint &&
+        subscription.hasP256dh &&
+        subscription.hasAuth
+    ).length;
+
+    return {
+      totalPushSubscriptions: rows.length,
+      enabledPushSubscriptions,
+      validPushSubscriptions,
+      pushSubscriptions,
+    };
   } catch (error) {
-    console.error("[ARTIPILOT_STATUS] Push count failed:", error);
-    return 0;
+    console.error("[ARTIPILOT_STATUS] Push debug failed:", error);
+    return emptyResult;
   }
 }
 
@@ -131,12 +205,11 @@ export async function GET(request: NextRequest) {
     const vapidPrivateKeyConfigured = isEnvSet("VAPID_PRIVATE_KEY");
     const vapidSubjectConfigured = isEnvSet("VAPID_SUBJECT");
 
-    const [totalContacts, totalMessages, totalPushSubscriptions] =
-      await Promise.all([
-        getTableCount("artipilot_contacts"),
-        getTableCount("artipilot_messages"),
-        getEnabledPushSubscriptionCount(),
-      ]);
+    const [totalContacts, totalMessages, pushDebug] = await Promise.all([
+      getTableCount("artipilot_contacts"),
+      getTableCount("artipilot_messages"),
+      getPushSubscriptionsDebug(),
+    ]);
 
     const canReceiveMessages =
       supabaseConfigured && whatsappVerifyTokenConfigured;
@@ -152,7 +225,8 @@ export async function GET(request: NextRequest) {
       supabaseConfigured &&
       vapidPublicKeyConfigured &&
       vapidPrivateKeyConfigured &&
-      totalPushSubscriptions > 0;
+      pushDebug.enabledPushSubscriptions > 0 &&
+      pushDebug.validPushSubscriptions > 0;
 
     return NextResponse.json({
       hasPrivateSession,
@@ -168,7 +242,11 @@ export async function GET(request: NextRequest) {
       vapidPublicKeyConfigured,
       vapidPrivateKeyConfigured,
       vapidSubjectConfigured,
-      totalPushSubscriptions,
+
+      totalPushSubscriptions: pushDebug.totalPushSubscriptions,
+      enabledPushSubscriptions: pushDebug.enabledPushSubscriptions,
+      validPushSubscriptions: pushDebug.validPushSubscriptions,
+      pushSubscriptions: pushDebug.pushSubscriptions,
 
       totalContacts,
       totalMessages,

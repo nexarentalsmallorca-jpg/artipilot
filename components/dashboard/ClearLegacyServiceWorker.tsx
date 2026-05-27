@@ -2,7 +2,20 @@
 
 import { useEffect } from "react";
 
-const CACHE_CLEANUP_KEY = "artipilot_private_legacy_cache_cleanup_v2";
+const CACHE_CLEANUP_KEY = "artipilot_private_legacy_cache_cleanup_v3";
+const PUSH_SERVICE_WORKER_FILE = "artipilot-push-sw.js";
+
+function isArtipilotPushServiceWorker(registration: ServiceWorkerRegistration) {
+  const activeUrl = registration.active?.scriptURL || "";
+  const installingUrl = registration.installing?.scriptURL || "";
+  const waitingUrl = registration.waiting?.scriptURL || "";
+
+  return (
+    activeUrl.includes(PUSH_SERVICE_WORKER_FILE) ||
+    installingUrl.includes(PUSH_SERVICE_WORKER_FILE) ||
+    waitingUrl.includes(PUSH_SERVICE_WORKER_FILE)
+  );
+}
 
 export default function ClearLegacyServiceWorker() {
   useEffect(() => {
@@ -22,7 +35,22 @@ export default function ClearLegacyServiceWorker() {
           const registrations = await navigator.serviceWorker.getRegistrations();
 
           await Promise.all(
-            registrations.map((registration) => registration.unregister())
+            registrations.map(async (registration) => {
+              if (isArtipilotPushServiceWorker(registration)) {
+                console.log(
+                  "[ARTIPILOT_PRIVATE] Keeping push service worker:",
+                  registration.scope
+                );
+                return;
+              }
+
+              console.log(
+                "[ARTIPILOT_PRIVATE] Removing legacy service worker:",
+                registration.scope
+              );
+
+              await registration.unregister();
+            })
           );
         }
 
@@ -30,7 +58,10 @@ export default function ClearLegacyServiceWorker() {
           const cacheNames = await caches.keys();
 
           await Promise.all(
-            cacheNames.map((cacheName) => caches.delete(cacheName))
+            cacheNames.map(async (cacheName) => {
+              console.log("[ARTIPILOT_PRIVATE] Removing legacy cache:", cacheName);
+              await caches.delete(cacheName);
+            })
           );
         }
 

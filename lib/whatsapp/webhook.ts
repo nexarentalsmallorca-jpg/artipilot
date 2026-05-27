@@ -369,9 +369,20 @@ function getNotificationBody(name: string, text: string) {
     return cleanName ? `${cleanName} sent a message` : "New customer message";
   }
 
-  const preview = cleanText.length > 120 ? `${cleanText.slice(0, 117)}...` : cleanText;
+  const preview =
+    cleanText.length > 120 ? `${cleanText.slice(0, 117)}...` : cleanText;
 
   return cleanName ? `${cleanName}: ${preview}` : preview;
+}
+
+function getInboxNotificationUrl(contactId: string) {
+  const cleanContactId = safeString(contactId);
+
+  if (!cleanContactId) {
+    return "/dashboard/inbox";
+  }
+
+  return `/dashboard/inbox?contact=${encodeURIComponent(cleanContactId)}`;
 }
 
 async function notifyNewInboundMessage(params: {
@@ -382,18 +393,34 @@ async function notifyNewInboundMessage(params: {
   try {
     const name = getContactDisplayName(params.contact, params.phone);
 
+    logDebug("Push notification send started", {
+      contactId: params.contact.id,
+      phone: params.phone,
+    });
+
     const result = await sendPushNotificationToAll({
       title: "New WhatsApp message",
       body: getNotificationBody(name, params.text),
-      url: "/dashboard/inbox",
+      url: getInboxNotificationUrl(params.contact.id),
       tag: `artipilot-whatsapp-${params.contact.id}`,
       contactId: params.contact.id,
       phone: params.phone,
     });
 
     logDebug("Push notification result", result);
+
+    return result;
   } catch (error) {
     logError("Push notification failed", error);
+
+    return {
+      ok: false,
+      sent: 0,
+      failed: 1,
+      skipped: 0,
+      totalSubscriptions: 0,
+      error: getErrorMessage(error, "Push notification failed."),
+    };
   }
 }
 
@@ -727,10 +754,10 @@ async function maybeAutoReply(params: {
 
   try {
     replyText = await generateAiReply({
-  customerMessage: inboundBody,
-  recentMessages: history,
-  isFirstCustomerChat,
-});
+      customerMessage: inboundBody,
+      recentMessages: history,
+      isFirstCustomerChat,
+    });
   } catch (error) {
     logError("Nero AI generation failed", error);
     return;
@@ -928,7 +955,7 @@ export async function POST(request: NextRequest) {
 
         await touchContactLastMessage(contact.id, text);
 
-        void notifyNewInboundMessage({
+        await notifyNewInboundMessage({
           contact,
           phone,
           text,
