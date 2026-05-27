@@ -727,9 +727,10 @@ async function maybeAutoReply(params: {
 
   try {
     replyText = await generateAiReply({
-      customerMessage: inboundBody,
-      recentMessages: history,
-    });
+  customerMessage: inboundBody,
+  recentMessages: history,
+  isFirstCustomerChat,
+});
   } catch (error) {
     logError("Nero AI generation failed", error);
     return;

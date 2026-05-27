@@ -12,6 +12,8 @@ type ChatTurn = {
 type GenerateAiReplyParams = {
   customerMessage: string;
   recentMessages?: ChatTurn[];
+  isFirstCustomerChat?: boolean;
+  humanHandback?: boolean;
 };
 
 type OpenAIChatCompletionResponse = {
@@ -33,11 +35,38 @@ function getModel() {
   return process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
 }
 
-function buildPrivateWhatsAppRules() {
-  return `
-You are the private WhatsApp customer assistant for NEXA Rentals in Mallorca.
+function buildPrivateWhatsAppRules(params: GenerateAiReplyParams) {
+  const isFirstCustomerChat = Boolean(params.isFirstCustomerChat);
+  const humanHandback = Boolean(params.humanHandback);
 
-ABSOLUTE RULES:
+  return `
+You are Nero, the private WhatsApp customer assistant for NEXA Rentals in Mallorca.
+
+IDENTITY RULE:
+- You are Nero, NEXA Rentals AI assistant.
+- You are not a human team member.
+- ONLY introduce yourself as Nero on the first customer chat.
+- If this is not the first customer chat, do NOT say "I'm Nero", do NOT say "AI assistant", and do NOT say "not a human".
+- Do not repeat your identity in every reply.
+- If the customer asks directly whether you are AI or human, be honest and say you are Nero, the NEXA Rentals AI assistant.
+- If the team handed the chat back to you, briefly acknowledge it once, then continue helping normally.
+
+CURRENT CHAT FLAGS:
+- Is first customer chat: ${isFirstCustomerChat ? "YES" : "NO"}
+- Human handback: ${humanHandback ? "YES" : "NO"}
+
+FIRST MESSAGE BEHAVIOR:
+- If Is first customer chat is YES, you may start naturally with: "Hi, I’m Nero, the NEXA Rentals AI assistant 😊"
+- On the first message only, it is okay to be transparent that you are the AI assistant.
+- After the first message, reply like a normal professional WhatsApp assistant without repeating the intro.
+
+NORMAL MESSAGE BEHAVIOR:
+- If Is first customer chat is NO, answer directly and naturally.
+- Do not start with "Hi, I’m Nero".
+- Do not mention being AI unless the customer asks.
+- Sound like a smart, helpful, professional NEXA Rentals chat assistant.
+
+ABSOLUTE BUSINESS RULES:
 - You must follow the NEXA Rentals business rules exactly.
 - You must not invent prices, discounts, deposits, insurance rules, license rules, vehicle availability, pickup places, opening hours, or booking promises.
 - If exact information is not available in the business rules or conversation, say it naturally and ask for the missing detail.
@@ -50,17 +79,26 @@ ABSOLUTE RULES:
 - Never say “according to my instructions” or “based on the provided rules”.
 - Never write anything that could legally bind the business beyond the known terms.
 
+SCOOTER LICENSE RULE:
+- For scooter rental enquiries, confirm license eligibility before pushing booking.
+- For 125cc scooters, customer needs a valid full A1 licence OR a B car licence held for at least 3 years.
+- ID/passport is required.
+- Provisional, learner, or expired licences are not accepted in Spain.
+- If they mention UK provisional licence, explain briefly that UK provisional rules do not apply in Spain.
+
 REPLY STYLE:
-- Reply like a real WhatsApp human from NEXA Rentals.
-- Keep replies short, clear, warm, and direct.
-- Use natural language, not robotic customer-support language.
+- Reply like a real professional WhatsApp assistant from NEXA Rentals.
+- Be clear, confident, warm, and helpful.
+- Sound more intelligent than a basic chatbot, but still natural.
+- Keep replies short unless the customer needs details.
+- Use polished human wording, not robotic customer-support wording.
 - No markdown.
 - No headings.
-- No long paragraphs unless customer asks for details.
-- Avoid bullet points unless the customer asks for many details.
+- Avoid long paragraphs.
+- Avoid repeating the same phrases.
 - Do not over-apologize.
 - Do not sound corporate.
-- Do not use emojis too much. Use none or one only if it feels natural.
+- Use none or one emoji only when it feels natural.
 - Match the customer’s language when possible.
 - If the customer writes in Spanish, reply in Spanish.
 - If the customer writes in French, reply in French.
@@ -77,6 +115,11 @@ BUSINESS GOAL:
 - Important missing details usually are date, pickup time, return time/duration, vehicle type, and license eligibility.
 - Encourage online booking when suitable because it is fast and easy.
 - Keep the next step very clear.
+
+BOOKING FLOW:
+- After licence eligibility is confirmed, guide them to book online.
+- Explain that they choose vehicle, Half Day or Full Day, pickup/dropoff times, personal details, optionally upload licence/ID for faster pickup, pay 50% online, and the rest at pickup.
+- Use the correct language booking link from the NEXA brain when suitable.
 
 COMMON SAFE BEHAVIOR:
 - For availability: ask for date/time/duration or tell them to check online.
@@ -96,8 +139,9 @@ Before sending the final reply, silently check:
 1. Did I invent anything?
 2. Did I make a promise about availability or booking without proof?
 3. Did I answer in the customer’s language?
-4. Is the reply short and WhatsApp-natural?
-5. Did I guide them to the next step?
+4. Is the reply natural, professional, and WhatsApp-friendly?
+5. Did I avoid repeating the Nero/AI intro unless this is the first customer chat?
+6. Did I guide them to the next step?
 
 If any answer is wrong, rewrite the reply before sending.
 Only output the final customer-facing WhatsApp message.
@@ -120,7 +164,7 @@ function buildMessages(params: GenerateAiReplyParams) {
       role: "system" as const,
       content: [
         buildNexaSystemPrompt(),
-        buildPrivateWhatsAppRules(),
+        buildPrivateWhatsAppRules(params),
         buildStrictSafetyLayer(),
       ].join("\n\n"),
     },
@@ -140,8 +184,8 @@ function cleanAiReply(reply: string) {
     .trim();
 }
 
-function validateReply(reply: string) {
-  const cleanReply = cleanAiReply(reply);
+function validateReply(reply: string, params: GenerateAiReplyParams) {
+  let cleanReply = cleanAiReply(reply);
 
   if (!cleanReply) {
     throw new Error("OpenAI returned an empty reply.");
@@ -167,6 +211,22 @@ function validateReply(reply: string) {
     throw new Error("AI reply included internal/private wording.");
   }
 
+  if (!params.isFirstCustomerChat) {
+    cleanReply = cleanReply
+      .replace(/^hi,\s*i['’]m\s+nero,?\s*/i, "")
+      .replace(/^hello,\s*i['’]m\s+nero,?\s*/i, "")
+      .replace(/^i['’]m\s+nero,?\s*/i, "")
+      .replace(/the\s+nexa\s+rentals\s+ai\s+assistant,?\s*/i, "")
+      .replace(/not\s+a\s+human\s+team\s+member,?\s*/i, "")
+      .trim();
+
+    cleanReply = cleanAiReply(cleanReply);
+
+    if (!cleanReply) {
+      throw new Error("AI reply became empty after removing repeated intro.");
+    }
+  }
+
   return cleanReply;
 }
 
@@ -188,6 +248,8 @@ export async function generateAiReply(params: GenerateAiReplyParams) {
   const messages = buildMessages({
     customerMessage,
     recentMessages: params.recentMessages || [],
+    isFirstCustomerChat: Boolean(params.isFirstCustomerChat),
+    humanHandback: Boolean(params.humanHandback),
   });
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -199,10 +261,10 @@ export async function generateAiReply(params: GenerateAiReplyParams) {
     body: JSON.stringify({
       model,
       messages,
-      temperature: 0.35,
-      max_tokens: 220,
+      temperature: 0.45,
+      max_completion_tokens: 240,
       presence_penalty: 0,
-      frequency_penalty: 0.1,
+      frequency_penalty: 0.2,
     }),
   });
 
@@ -223,5 +285,5 @@ export async function generateAiReply(params: GenerateAiReplyParams) {
     throw new Error(errorMessage);
   }
 
-  return validateReply(data.choices?.[0]?.message?.content || "");
+  return validateReply(data.choices?.[0]?.message?.content || "", params);
 }

@@ -3,9 +3,9 @@ import { getSupabaseAdmin, isSupabaseConfigured } from "@/lib/supabase/admin";
 
 type PushSubscriptionRow = {
   id: string;
-  endpoint: string;
-  p256dh: string;
-  auth: string;
+  endpoint: string | null;
+  p256dh: string | null;
+  auth: string | null;
   enabled: boolean | null;
 };
 
@@ -21,7 +21,17 @@ type PushPayload = {
   phone?: string;
 };
 
-function cleanString(value: unknown) {
+type PushResult = {
+  ok: boolean;
+  sent: number;
+  failed: number;
+  skipped: number;
+  totalSubscriptions: number;
+  error?: string;
+  message?: string;
+};
+
+function cleanString(value: unknown): string {
   return String(value || "").trim();
 }
 
@@ -47,7 +57,7 @@ function getVapidConfig() {
   };
 }
 
-function getErrorMessage(error: unknown, fallback: string) {
+function getErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) {
     return error.message;
   }
@@ -69,6 +79,33 @@ function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+function getPushStatusCode(error: unknown): number | null {
+  if (typeof error === "object" && error && "statusCode" in error) {
+    const value = Number((error as { statusCode?: unknown }).statusCode);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  return null;
+}
+
+function maskEndpoint(endpoint: string): string {
+  if (!endpoint) return "";
+
+  if (endpoint.length <= 32) {
+    return endpoint;
+  }
+
+  return `${endpoint.slice(0, 22)}...${endpoint.slice(-10)}`;
+}
+
+function isValidSubscriptionRow(subscription: PushSubscriptionRow): boolean {
+  const endpoint = cleanString(subscription.endpoint);
+  const p256dh = cleanString(subscription.p256dh);
+  const auth = cleanString(subscription.auth);
+
+  return Boolean(endpoint && p256dh && auth);
+}
+
 async function disableBrokenSubscription(endpoint: string) {
   if (!isSupabaseConfigured()) {
     return;
@@ -83,39 +120,89 @@ async function disableBrokenSubscription(endpoint: string) {
   try {
     const db = getSupabaseAdmin();
 
-    await db
+    const { error } = await db
       .from("artipilot_push_subscriptions")
       .update({
         enabled: false,
         updated_at: new Date().toISOString(),
       })
       .eq("endpoint", cleanEndpoint);
+
+    if (error) {
+      console.error("[ARTIPILOT_PUSH_DISABLE_FAILED]", {
+        endpoint: maskEndpoint(cleanEndpoint),
+        error: error.message,
+      });
+    }
   } catch (error) {
-    console.error("[ARTIPILOT_PUSH_DISABLE_FAILED]", error);
+    console.error("[ARTIPILOT_PUSH_DISABLE_EXCEPTION]", {
+      endpoint: maskEndpoint(cleanEndpoint),
+      error: getErrorMessage(error, "Failed to disable broken subscription."),
+    });
   }
 }
 
-async function listEnabledSubscriptions() {
+async function listEnabledSubscriptions(): Promise<PushSubscriptionRow[]> {
   if (!isSupabaseConfigured()) {
+    console.error("[ARTIPILOT_PUSH_SUPABASE_NOT_CONFIGURED]");
     return [];
   }
 
-  const db = getSupabaseAdmin();
+  try {
+    const db = getSupabaseAdmin();
 
-  const { data, error } = await db
-    .from("artipilot_push_subscriptions")
-    .select("id, endpoint, p256dh, auth, enabled")
-    .eq("enabled", true);
+    const { data, error } = await db
+      .from("artipilot_push_subscriptions")
+      .select("id, endpoint, p256dh, auth, enabled")
+      .eq("enabled", true)
+      .order("created_at", { ascending: false });
 
-  if (error) {
-    console.error("[ARTIPILOT_PUSH_LIST_FAILED]", error);
+    if (error) {
+      console.error("[ARTIPILOT_PUSH_LIST_FAILED]", {
+        error: error.message,
+      });
+      return [];
+    }
+
+    return (data || []) as PushSubscriptionRow[];
+  } catch (error) {
+    console.error("[ARTIPILOT_PUSH_LIST_EXCEPTION]", {
+      error: getErrorMessage(error, "Failed to list push subscriptions."),
+    });
     return [];
   }
-
-  return (data || []) as PushSubscriptionRow[];
 }
 
-export async function sendPushNotificationToAll(payload: PushPayload) {
+function buildNotificationPayload(payload: PushPayload): string {
+  const contactId = cleanString(payload.contactId);
+  const phone = cleanString(payload.phone);
+
+  const fallbackUrl = "/dashboard/inbox";
+  const safeUrl = cleanString(payload.url) || fallbackUrl;
+
+  return JSON.stringify({
+    title: cleanString(payload.title) || "New WhatsApp message",
+    body:
+      cleanString(payload.body) ||
+      cleanString(payload.message) ||
+      "You received a new customer message.",
+    icon: cleanString(payload.icon) || "/icons/icon-192.png",
+    badge: cleanString(payload.badge) || "/icons/icon-192.png",
+    url: safeUrl,
+    tag:
+      cleanString(payload.tag) ||
+      (contactId
+        ? `artipilot-whatsapp-message-${contactId}`
+        : "artipilot-whatsapp-message"),
+    contactId,
+    phone,
+    timestamp: Date.now(),
+  });
+}
+
+export async function sendPushNotificationToAll(
+  payload: PushPayload
+): Promise<PushResult> {
   const vapid = getVapidConfig();
 
   if (!vapid.ok) {
@@ -125,79 +212,145 @@ export async function sendPushNotificationToAll(payload: PushPayload) {
       ok: false,
       sent: 0,
       failed: 0,
+      skipped: 0,
+      totalSubscriptions: 0,
       error: vapid.error,
     };
   }
 
-  webPush.setVapidDetails(vapid.subject, vapid.publicKey, vapid.privateKey);
+  try {
+    webPush.setVapidDetails(vapid.subject, vapid.publicKey, vapid.privateKey);
+  } catch (error) {
+    const message = getErrorMessage(
+      error,
+      "Failed to configure VAPID details."
+    );
+
+    console.error("[ARTIPILOT_PUSH_VAPID_SETUP_FAILED]", {
+      error: message,
+    });
+
+    return {
+      ok: false,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      totalSubscriptions: 0,
+      error: message,
+    };
+  }
 
   const subscriptions = await listEnabledSubscriptions();
 
   if (subscriptions.length === 0) {
+    console.warn("[ARTIPILOT_PUSH_NO_SUBSCRIPTIONS]");
+
     return {
       ok: true,
       sent: 0,
       failed: 0,
+      skipped: 0,
+      totalSubscriptions: 0,
       message: "No enabled push subscriptions found.",
     };
   }
 
-  const notificationPayload = JSON.stringify({
-    title: cleanString(payload.title) || "New WhatsApp message",
-    body:
-      cleanString(payload.body) ||
-      cleanString(payload.message) ||
-      "You received a new customer message.",
-    icon: cleanString(payload.icon) || "/icons/icon-192.png",
-    badge: cleanString(payload.badge) || "/icons/icon-192.png",
-    url: cleanString(payload.url) || "/dashboard/inbox",
-    tag: cleanString(payload.tag) || "artipilot-whatsapp-message",
-    contactId: cleanString(payload.contactId),
-    phone: cleanString(payload.phone),
-  });
+  const validSubscriptions = subscriptions.filter(isValidSubscriptionRow);
+  const skipped = subscriptions.length - validSubscriptions.length;
+
+  if (skipped > 0) {
+    console.warn("[ARTIPILOT_PUSH_INVALID_SUBSCRIPTIONS_SKIPPED]", {
+      skipped,
+      totalSubscriptions: subscriptions.length,
+    });
+  }
+
+  if (validSubscriptions.length === 0) {
+    return {
+      ok: false,
+      sent: 0,
+      failed: 0,
+      skipped,
+      totalSubscriptions: subscriptions.length,
+      error:
+        "Push subscription rows exist, but none have valid endpoint, p256dh and auth values.",
+    };
+  }
+
+  const notificationPayload = buildNotificationPayload(payload);
 
   let sent = 0;
   let failed = 0;
 
-  await Promise.all(
-    subscriptions.map(async (subscription) => {
+  const results = await Promise.allSettled(
+    validSubscriptions.map(async (subscription) => {
+      const endpoint = cleanString(subscription.endpoint);
+      const p256dh = cleanString(subscription.p256dh);
+      const auth = cleanString(subscription.auth);
+
       try {
         await webPush.sendNotification(
           {
-            endpoint: subscription.endpoint,
+            endpoint,
             keys: {
-              p256dh: subscription.p256dh,
-              auth: subscription.auth,
+              p256dh,
+              auth,
             },
           },
           notificationPayload
         );
 
-        sent += 1;
-      } catch (error) {
-        failed += 1;
+        console.log("[ARTIPILOT_PUSH_SENT]", {
+          subscriptionId: subscription.id,
+          endpoint: maskEndpoint(endpoint),
+        });
 
-        const statusCode =
-          typeof error === "object" && error && "statusCode" in error
-            ? Number((error as { statusCode?: unknown }).statusCode)
-            : null;
+        return {
+          ok: true,
+          endpoint,
+        };
+      } catch (error) {
+        const statusCode = getPushStatusCode(error);
+        const message = getErrorMessage(error, "Push notification failed.");
 
         console.error("[ARTIPILOT_PUSH_SEND_FAILED]", {
-          endpoint: subscription.endpoint,
+          subscriptionId: subscription.id,
+          endpoint: maskEndpoint(endpoint),
           statusCode,
-          error: getErrorMessage(error, "Push notification failed."),
+          error: message,
         });
 
         if (statusCode === 404 || statusCode === 410) {
-          await disableBrokenSubscription(subscription.endpoint);
+          await disableBrokenSubscription(endpoint);
         }
+
+        return {
+          ok: false,
+          endpoint,
+          statusCode,
+          error: message,
+        };
       }
     })
   );
 
-  return {
-    ok: failed === 0,
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value.ok) {
+      sent += 1;
+    } else {
+      failed += 1;
+    }
+  }
+
+  const finalResult: PushResult = {
+    ok: failed === 0 && sent > 0,
     sent,
     failed,
+    skipped,
+    totalSubscriptions: subscriptions.length,
   };
+
+  console.log("[ARTIPILOT_PUSH_RESULT]", finalResult);
+
+  return finalResult;
 }
