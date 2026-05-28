@@ -41,18 +41,64 @@ function getModel() {
   return process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
 }
 
-function safeJsonParse(value: string): Record<string, unknown> | null {
+function extractJsonObject(value: string): Record<string, unknown> | null {
+  const clean = cleanText(value);
+
+  if (!clean) {
+    return null;
+  }
+
   try {
-    const parsed = JSON.parse(value);
+    const parsed = JSON.parse(clean);
 
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as Record<string, unknown>;
     }
+  } catch {
+    // Try extracting JSON from wrapped/markdown response.
+  }
 
+  const match = clean.match(/\{[\s\S]*\}/);
+
+  if (!match?.[0]) {
     return null;
+  }
+
+  try {
+    const parsed = JSON.parse(match[0]);
+
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
   } catch {
     return null;
   }
+
+  return null;
+}
+
+function normalizeLanguageCode(value: unknown) {
+  const language = cleanText(value).toLowerCase();
+
+  if (!language) return "unknown";
+
+  const map: Record<string, string> = {
+    english: "en",
+    spanish: "es",
+    español: "es",
+    french: "fr",
+    français: "fr",
+    italian: "it",
+    italiano: "it",
+    german: "de",
+    deutsch: "de",
+    portuguese: "pt",
+    português: "pt",
+    swedish: "sv",
+    svenska: "sv",
+  };
+
+  return map[language] || language.slice(0, 8);
 }
 
 function buildPrivateWhatsAppRules(params: GenerateAiReplyParams) {
@@ -109,15 +155,10 @@ SCOOTER LICENSE RULE:
 REPLY STYLE:
 - Reply like a real professional WhatsApp assistant from NEXA Rentals.
 - Be clear, confident, warm, and helpful.
-- Sound more intelligent than a basic chatbot, but still natural.
 - Keep replies short unless the customer needs details.
-- Use polished human wording, not robotic customer-support wording.
 - No markdown.
 - No headings.
 - Avoid long paragraphs.
-- Avoid repeating the same phrases.
-- Do not over-apologize.
-- Do not sound corporate.
 - Use none or one emoji only when it feels natural.
 - Match the customer’s language when possible.
 - If the customer writes in Spanish, reply in Spanish.
@@ -135,21 +176,6 @@ BUSINESS GOAL:
 - Important missing details usually are date, pickup time, return time/duration, vehicle type, and license eligibility.
 - Encourage online booking when suitable because it is fast and easy.
 - Keep the next step very clear.
-
-BOOKING FLOW:
-- After licence eligibility is confirmed, guide them to book online.
-- Explain that they choose vehicle, Half Day or Full Day, pickup/dropoff times, personal details, optionally upload licence/ID for faster pickup, pay 50% online, and the rest at pickup.
-- Use the correct language booking link from the NEXA brain when suitable.
-
-COMMON SAFE BEHAVIOR:
-- For availability: ask for date/time/duration or tell them to check online.
-- For license: answer only with known license rules from the NEXA brain.
-- For prices: answer only with known prices from the NEXA brain.
-- For deposits: answer only with known deposit rules from the NEXA brain.
-- For documents: answer only with known document/license rules from the NEXA brain.
-- For location/pickup: answer only with known location/pickup rules from the NEXA brain.
-- For complaints or problems: be calm, helpful, and ask for the booking name/phone or issue details.
-- For unclear messages: ask one short clarification question.
 `.trim();
 }
 
@@ -323,6 +349,8 @@ export async function translateMessageToEnglish(
   }
 
   if (!apiKey) {
+    console.error("[ARTIPILOT_TRANSLATION_NO_OPENAI_KEY]");
+
     return {
       englishTranslation: null,
       detectedLanguage: null,
@@ -345,28 +373,24 @@ export async function translateMessageToEnglish(
           {
             role: "system",
             content: `
-You are a precise translation engine for a private WhatsApp inbox.
+You are a translation engine for a private WhatsApp inbox.
 
-Task:
-- Detect the language of the message.
-- Translate the message into natural English.
-- Preserve meaning, dates, prices, names, phone numbers, URLs, emojis, and business details exactly.
-- Do not add extra explanation.
-- Do not answer the message.
-- Do not summarize.
-- Return only valid JSON.
+Detect the input language and translate the input into natural English.
 
-JSON format:
+Return ONLY valid JSON with this exact shape:
 {
-  "detectedLanguage": "two-letter language code like en, es, fr, de, it, pt, sv, unknown",
-  "englishTranslation": "English translation here",
+  "detectedLanguage": "en|es|fr|de|it|pt|sv|unknown",
+  "englishTranslation": "translated English text",
   "shouldDisplay": true
 }
 
 Rules:
-- If the original message is already English, set shouldDisplay to false and englishTranslation to the original text.
-- If the message is mixed language, translate the non-English parts and set shouldDisplay to true.
-- If the message is only a URL, number, emoji, name, or cannot be translated, set shouldDisplay to false.
+- If input is already English, set shouldDisplay to false.
+- If input is not English, set shouldDisplay to true.
+- If input is mixed, translate the non-English parts and set shouldDisplay to true.
+- Preserve prices, dates, times, names, phone numbers, URLs, emojis and business details exactly.
+- Do not answer the message.
+- Do not explain anything.
 `.trim(),
           },
           {
@@ -378,6 +402,9 @@ Rules:
         max_completion_tokens: 220,
         presence_penalty: 0,
         frequency_penalty: 0,
+        response_format: {
+          type: "json_object",
+        },
       }),
     });
 
@@ -404,7 +431,7 @@ Rules:
     }
 
     const content = cleanText(data.choices?.[0]?.message?.content);
-    const parsed = safeJsonParse(content);
+    const parsed = extractJsonObject(content);
 
     if (!parsed) {
       console.error("[ARTIPILOT_TRANSLATION_JSON_PARSE_FAILED]", {
@@ -418,9 +445,17 @@ Rules:
       };
     }
 
-    const detectedLanguage = cleanText(parsed.detectedLanguage) || "unknown";
+    const detectedLanguage = normalizeLanguageCode(parsed.detectedLanguage);
     const englishTranslation = cleanText(parsed.englishTranslation);
     const shouldDisplay = parsed.shouldDisplay === true;
+
+    console.log("[ARTIPILOT_TRANSLATION_RESULT]", {
+      detectedLanguage,
+      shouldDisplay,
+      hasTranslation: Boolean(englishTranslation),
+      inputPreview: cleanInput.slice(0, 60),
+      translationPreview: englishTranslation.slice(0, 60),
+    });
 
     if (!shouldDisplay || !englishTranslation) {
       return {
