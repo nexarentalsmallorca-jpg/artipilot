@@ -120,6 +120,14 @@ type InboundMessageType =
   | "button"
   | "unknown";
 
+type MediaForAi = {
+  type: InboundMessageType;
+  mediaId: string;
+  caption: string;
+  filename: string;
+  mimeType: string;
+} | null;
+
 function logDebug(label: string, data?: unknown) {
   console.log(`[NERO_WEBHOOK] ${label}`, data ?? "");
 }
@@ -189,7 +197,7 @@ function normalizeInboundMessageType(value: unknown): InboundMessageType {
   return type ? "unknown" : "text";
 }
 
-function getMediaFromMessage(message: WaMessage) {
+function getMediaFromMessage(message: WaMessage): MediaForAi {
   const type = normalizeInboundMessageType(message.type);
 
   if (type === "image" && message.image?.id) {
@@ -711,19 +719,164 @@ function buildHistoryForAi(messages: ArtipilotMessage[]) {
     }));
 }
 
+function looksLikeDocumentOrLicenceText(value: string) {
+  const text = safeString(value).toLowerCase();
+
+  if (!text) {
+    return false;
+  }
+
+  return (
+    text.includes("licence") ||
+    text.includes("license") ||
+    text.includes("driving") ||
+    text.includes("driver") ||
+    text.includes("passport") ||
+    text.includes("id") ||
+    text.includes("dni") ||
+    text.includes("document") ||
+    text.includes("permiso") ||
+    text.includes("carnet") ||
+    text.includes("conducir") ||
+    text.includes("passeport") ||
+    text.includes("führerschein") ||
+    text.includes("ausweis") ||
+    text.includes("patente")
+  );
+}
+
+function buildAiInputFromInboundMessage(params: {
+  message: WaMessage;
+  savedText: string;
+  messageType: InboundMessageType;
+  media: MediaForAi;
+}) {
+  const savedText = safeString(params.savedText);
+  const caption = safeString(params.media?.caption);
+  const filename = safeString(params.media?.filename);
+  const mimeType = safeString(params.media?.mimeType);
+  const type = params.messageType;
+
+  if (type === "text") {
+    return savedText;
+  }
+
+  const combinedText = [savedText, caption, filename, mimeType]
+    .filter(Boolean)
+    .join(" ");
+
+  const mightBeLicenceOrId = looksLikeDocumentOrLicenceText(combinedText);
+
+  if (type === "image") {
+    if (mightBeLicenceOrId) {
+      return [
+        "Customer sent an image that may be a driving licence, ID, passport, or rental document.",
+        caption ? `Customer caption: ${caption}` : "",
+        "Reply politely. Do not approve or reject the document yourself. Say you will forward this image to the team so they can check and confirm it. Remind the customer to bring the original driving licence and ID/passport at pickup.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    return [
+      "Customer sent an image/photo.",
+      caption ? `Customer caption: ${caption}` : "",
+      "Reply naturally and politely. If it looks like a licence, ID, passport, or document, say the team will check it. If the image context is unclear, acknowledge it and ask how you can help.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (type === "document") {
+    if (mightBeLicenceOrId) {
+      return [
+        "Customer sent a document that may be a driving licence, ID, passport, or rental document.",
+        filename ? `Filename: ${filename}` : "",
+        caption ? `Customer caption: ${caption}` : "",
+        "Reply politely. Do not approve or reject the document yourself. Say you will forward it to the team so they can check and confirm it. Remind the customer to bring the original driving licence and ID/passport at pickup.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    return [
+      "Customer sent a document/file.",
+      filename ? `Filename: ${filename}` : "",
+      caption ? `Customer caption: ${caption}` : "",
+      "Reply naturally and politely. If it is for licence/ID verification, say the team will check and confirm it.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (type === "video") {
+    return [
+      "Customer sent a video.",
+      caption ? `Customer caption: ${caption}` : "",
+      "Reply naturally and politely. If it is about an active rental problem, accident, damage, or mechanical issue, prioritise safety and urgent support according to the NEXA rules.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (type === "location" && params.message.location) {
+    const latitude = params.message.location.latitude;
+    const longitude = params.message.location.longitude;
+    const name = safeString(params.message.location.name);
+    const address = safeString(params.message.location.address);
+
+    return [
+      "Customer shared a location.",
+      name ? `Location name: ${name}` : "",
+      address ? `Address: ${address}` : "",
+      latitude && longitude ? `Coordinates: ${latitude}, ${longitude}` : "",
+      "Reply naturally and ask what they need help with. Do not promise delivery or pickup at that location unless the team has confirmed it.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (type === "audio") {
+    return "Customer sent an audio/voice message. Politely say you received it, but ask them to type the main details so you can help accurately with booking, licence, price, or rental support.";
+  }
+
+  if (type === "sticker") {
+    return "Customer sent a sticker. Reply briefly and politely only if it makes sense; otherwise ask how you can help with booking, prices, licence, location, or rental support.";
+  }
+
+  return savedText || `Customer sent a ${type} message. Reply politely and ask how you can help.`;
+}
+
+function shouldAutoReplyToMessageType(messageType: InboundMessageType) {
+  return (
+    messageType === "text" ||
+    messageType === "image" ||
+    messageType === "document" ||
+    messageType === "video" ||
+    messageType === "location" ||
+    messageType === "audio"
+  );
+}
+
 async function maybeAutoReply(params: {
   contact: ArtipilotContact;
   phone: string;
   inboundBody: string;
+  messageType: InboundMessageType;
+  media: MediaForAi;
+  rawMessage: WaMessage;
 }) {
   const phone = normalizePhone(params.phone);
   const inboundBody = safeString(params.inboundBody);
+  const messageType = params.messageType;
 
   logDebug("Auto reply check started", {
     phone,
     contactId: params.contact.id,
     aiEnabled: params.contact.ai_enabled,
     inboundBody,
+    messageType,
+    mediaId: params.media?.mediaId || null,
     config: getAiDebugStatus(),
   });
 
@@ -737,8 +890,15 @@ async function maybeAutoReply(params: {
     return;
   }
 
+  if (!shouldAutoReplyToMessageType(messageType)) {
+    logDebug("Auto reply skipped: unsupported message type", {
+      messageType,
+    });
+    return;
+  }
+
   if (!inboundBody) {
-    logDebug("Auto reply skipped: empty inbound body");
+    logDebug("Auto reply skipped: empty AI input");
     return;
   }
 
@@ -766,6 +926,7 @@ async function maybeAutoReply(params: {
     recentMessagesCount: recentMessages.length,
     historyCount: history.length,
     isFirstCustomerChat,
+    messageType,
   });
 
   let replyText = "";
@@ -988,18 +1149,21 @@ export async function POST(request: NextRequest) {
           text,
         });
 
-        if (isRealTextMessage(message)) {
-          await maybeAutoReply({
-            contact,
-            phone,
-            inboundBody: message.text?.body?.trim() || "",
-          });
-        } else {
-          logDebug("Auto reply skipped: media/non-text message", {
-            messageType,
-            mediaId,
-          });
-        }
+        const aiInput = buildAiInputFromInboundMessage({
+          message,
+          savedText: text,
+          messageType,
+          media,
+        });
+
+        await maybeAutoReply({
+          contact,
+          phone,
+          inboundBody: aiInput,
+          messageType,
+          media,
+          rawMessage: message,
+        });
       } catch (error) {
         logError("Webhook message handling failed", error);
       }
