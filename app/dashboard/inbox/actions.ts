@@ -22,6 +22,24 @@ type QuickReply = {
   content: string;
 };
 
+type ChatTurn = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+type MessageLike = ApiMessage & {
+  body?: string | null;
+  content?: string | null;
+  message_type?: string | null;
+  media_id?: string | null;
+  media_url?: string | null;
+  media_filename?: string | null;
+  filename?: string | null;
+  mime_type?: string | null;
+  detected_language?: string | null;
+  english_translation?: string | null;
+};
+
 function cleanString(value: unknown) {
   return String(value || "").trim();
 }
@@ -80,6 +98,223 @@ function isSchemaError(error: unknown) {
     message.includes("does not exist") ||
     message.includes("relation")
   );
+}
+
+function getMessageText(message: ApiMessage | MessageLike) {
+  const item = message as MessageLike;
+
+  return cleanString(item.body || item.content);
+}
+
+function getMessageType(message: ApiMessage | MessageLike) {
+  const item = message as MessageLike;
+  return cleanString(item.message_type || "text").toLowerCase();
+}
+
+function getMessageFilename(message: ApiMessage | MessageLike) {
+  const item = message as MessageLike;
+  return cleanString(item.media_filename || item.filename);
+}
+
+function getMessageMimeType(message: ApiMessage | MessageLike) {
+  const item = message as MessageLike;
+  return cleanString(item.mime_type);
+}
+
+function looksLikeDocumentOrLicenceText(value: string) {
+  const text = cleanString(value).toLowerCase();
+
+  if (!text) {
+    return false;
+  }
+
+  return (
+    text.includes("licence") ||
+    text.includes("license") ||
+    text.includes("driving") ||
+    text.includes("driver") ||
+    text.includes("passport") ||
+    text.includes("id") ||
+    text.includes("dni") ||
+    text.includes("document") ||
+    text.includes("permiso") ||
+    text.includes("carnet") ||
+    text.includes("conducir") ||
+    text.includes("passeport") ||
+    text.includes("führerschein") ||
+    text.includes("ausweis") ||
+    text.includes("patente")
+  );
+}
+
+function buildAiContentFromMessage(message: ApiMessage | MessageLike) {
+  const text = getMessageText(message);
+  const messageType = getMessageType(message);
+  const filename = getMessageFilename(message);
+  const mimeType = getMessageMimeType(message);
+
+  if (!messageType || messageType === "text") {
+    return text;
+  }
+
+  const combined = [text, filename, mimeType].filter(Boolean).join(" ");
+  const mightBeLicenceOrId = looksLikeDocumentOrLicenceText(combined);
+
+  if (messageType === "image") {
+    if (mightBeLicenceOrId) {
+      return [
+        "Customer sent an image that may be a driving licence, ID, passport, or rental document.",
+        text ? `Customer caption/message: ${text}` : "",
+        "Important: do not approve or reject the document yourself. Say the image will be forwarded to the team so they can check and confirm it. Remind the customer to bring the original driving licence and ID/passport at pickup.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    return [
+      "Customer sent an image/photo.",
+      text ? `Customer caption/message: ${text}` : "",
+      "Reply naturally. If it appears to be a licence, ID, passport, or document, say the team will check it. If unclear, acknowledge it and ask how you can help.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (messageType === "document") {
+    if (mightBeLicenceOrId) {
+      return [
+        "Customer sent a document that may be a driving licence, ID, passport, or rental document.",
+        filename ? `Filename: ${filename}` : "",
+        text ? `Customer caption/message: ${text}` : "",
+        "Important: do not approve or reject the document yourself. Say the document will be forwarded to the team so they can check and confirm it. Remind the customer to bring the original driving licence and ID/passport at pickup.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    return [
+      "Customer sent a document/file.",
+      filename ? `Filename: ${filename}` : "",
+      text ? `Customer caption/message: ${text}` : "",
+      "Reply naturally. If it is for licence/ID verification, say the team will check and confirm it.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (messageType === "video") {
+    return [
+      "Customer sent a video.",
+      text ? `Customer caption/message: ${text}` : "",
+      "Reply naturally and politely. If it is about an active rental problem, accident, damage, or mechanical issue, prioritise safety and urgent support according to the NEXA rules.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (messageType === "audio") {
+    return "Customer sent an audio/voice message. Politely ask them to type the main details so you can help accurately with booking, licence, price, or rental support.";
+  }
+
+  if (messageType === "location") {
+    return [
+      "Customer shared a location.",
+      text ? `Location/message: ${text}` : "",
+      "Reply naturally and ask what they need help with. Do not promise delivery or pickup at that location unless the team has confirmed it.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  return text || `Customer sent a ${messageType} message. Reply politely and ask how you can help.`;
+}
+
+function buildRecentMessagesForAi(messages: ApiMessage[]): ChatTurn[] {
+  return messages
+    .map((message) => {
+      const content = buildAiContentFromMessage(message);
+
+      if (!cleanString(content)) {
+        return null;
+      }
+
+      return {
+        role:
+          message.direction === "inbound"
+            ? ("user" as const)
+            : ("assistant" as const),
+        content,
+      };
+    })
+    .filter((item): item is ChatTurn => Boolean(item))
+    .slice(-24);
+}
+
+function getLastInboundMessageForAi(messages: ApiMessage[]) {
+  return [...messages]
+    .reverse()
+    .find((message) => message.direction === "inbound");
+}
+
+function shouldUseFirstChatIntro(messages: ApiMessage[]) {
+  const inboundCount = messages.filter(
+    (message) => message.direction === "inbound"
+  ).length;
+
+  const outboundCount = messages.filter(
+    (message) => message.direction === "outbound"
+  ).length;
+
+  return inboundCount <= 1 && outboundCount === 0;
+}
+
+async function updateContactFields(
+  contactId: string,
+  updates: Record<string, unknown>
+): Promise<{ contact?: ApiContact; error?: string }> {
+  try {
+    await assertPrivateSessionServer();
+
+    const cleanContactId = cleanString(contactId);
+
+    if (!cleanContactId) {
+      return {
+        error: "Contact ID is required.",
+      };
+    }
+
+    if (!isSupabaseConfigured()) {
+      return {
+        error: "Supabase is not configured.",
+      };
+    }
+
+    const db = getSupabaseAdmin();
+
+    const { data, error } = await db
+      .from("artipilot_contacts")
+      .update({
+        ...updates,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", cleanContactId)
+      .select("*")
+      .single<ApiContact>();
+
+    if (error) {
+      throw error;
+    }
+
+    return {
+      contact: data,
+    };
+  } catch (error) {
+    console.error("updateContactFields error:", error);
+
+    return {
+      error: getErrorMessage(error, "Could not update contact."),
+    };
+  }
 }
 
 export async function fetchContactsAction(): Promise<{
@@ -206,10 +441,6 @@ export async function sendMessageAction(
       };
     }
 
-    /*
-      Save as pending first, then update after Meta responds.
-      This is safer and matches the /api/whatsapp/send route.
-    */
     const pendingMessage = await insertOutboundMessage({
       contactId: contact.id,
       phone,
@@ -329,6 +560,146 @@ export async function toggleAiAction(
   }
 }
 
+export async function setNeedsHumanAttentionAction(
+  contactId: string,
+  needsHumanAttention: boolean
+): Promise<{ contact?: ApiContact; error?: string }> {
+  return updateContactFields(contactId, {
+    needs_human_attention: Boolean(needsHumanAttention),
+  });
+}
+
+export async function blockContactAction(
+  contactId: string,
+  blocked: boolean
+): Promise<{ contact?: ApiContact; error?: string }> {
+  return updateContactFields(contactId, {
+    blocked: Boolean(blocked),
+    ai_enabled: blocked ? false : undefined,
+  });
+}
+
+export async function deleteMessageAction(
+  messageId: string
+): Promise<{ ok?: boolean; error?: string }> {
+  try {
+    await assertPrivateSessionServer();
+
+    const cleanMessageId = cleanString(messageId);
+
+    if (!cleanMessageId) {
+      return {
+        error: "Message ID is required.",
+      };
+    }
+
+    if (!isSupabaseConfigured()) {
+      return {
+        error: "Supabase is not configured.",
+      };
+    }
+
+    const db = getSupabaseAdmin();
+
+    const { error } = await db
+      .from("artipilot_messages")
+      .delete()
+      .eq("id", cleanMessageId);
+
+    if (error) {
+      throw error;
+    }
+
+    return {
+      ok: true,
+    };
+  } catch (error) {
+    console.error("deleteMessageAction error:", error);
+
+    return {
+      error: getErrorMessage(error, "Could not delete message."),
+    };
+  }
+}
+
+export async function deleteChatAction(
+  contactId: string
+): Promise<{ ok?: boolean; error?: string }> {
+  try {
+    await assertPrivateSessionServer();
+
+    const cleanContactId = cleanString(contactId);
+
+    if (!cleanContactId) {
+      return {
+        error: "Contact ID is required.",
+      };
+    }
+
+    if (!isSupabaseConfigured()) {
+      return {
+        error: "Supabase is not configured.",
+      };
+    }
+
+    const contact = await getContactById(cleanContactId);
+
+    if (!contact?.id) {
+      return {
+        error: "Contact was not found.",
+      };
+    }
+
+    const db = getSupabaseAdmin();
+
+    const { error: messagesError } = await db
+      .from("artipilot_messages")
+      .delete()
+      .eq("contact_id", cleanContactId);
+
+    if (messagesError && !isSchemaError(messagesError)) {
+      throw messagesError;
+    }
+
+    if (messagesError && isSchemaError(messagesError)) {
+      const phone = normalizePhoneForDisplay(contact.phone);
+
+      const fallback = await db
+        .from("artipilot_messages")
+        .delete()
+        .eq("contact_phone", phone);
+
+      if (fallback.error) {
+        throw fallback.error;
+      }
+    }
+
+    const { error: contactError } = await db
+      .from("artipilot_contacts")
+      .update({
+        last_message: null,
+        last_message_at: null,
+        unread_count: 0,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", cleanContactId);
+
+    if (contactError) {
+      throw contactError;
+    }
+
+    return {
+      ok: true,
+    };
+  } catch (error) {
+    console.error("deleteChatAction error:", error);
+
+    return {
+      error: getErrorMessage(error, "Could not delete chat."),
+    };
+  }
+}
+
 export async function fetchQuickRepliesAction(): Promise<{
   items: QuickReply[];
 }> {
@@ -434,36 +805,29 @@ export async function suggestAiAction(contactId: string): Promise<{
       await listMessagesForContact(cleanContactId)
     );
 
-    const textMessages = messages.filter((message) =>
-      cleanString(message.body)
-    );
+    const lastInboundMessage = getLastInboundMessageForAi(messages);
 
-    const lastInboundMessage = [...textMessages]
-      .reverse()
-      .find((message) => message.direction === "inbound" && message.body);
-
-    if (!lastInboundMessage?.body) {
+    if (!lastInboundMessage) {
       return {
-        error: "No customer text message found to reply to.",
+        error: "No customer message found to reply to.",
       };
     }
 
-    /*
-      Keep AI suggestion text-only for now.
-      Media messages can appear in the chat, but we do not send image/video/PDF
-      content to the AI brain yet.
-    */
-    const recentMessages = textMessages.slice(-24).map((message) => ({
-      role:
-        message.direction === "inbound"
-          ? ("user" as const)
-          : ("assistant" as const),
-      content: cleanString(message.body),
-    }));
+    const customerMessage = buildAiContentFromMessage(lastInboundMessage);
+    const recentMessages = buildRecentMessagesForAi(messages);
+    const isFirstCustomerChat = shouldUseFirstChatIntro(messages);
+
+    if (!cleanString(customerMessage)) {
+      return {
+        error: "No customer message content found to reply to.",
+      };
+    }
 
     const suggestion = await generateAiReply({
-      customerMessage: cleanString(lastInboundMessage.body),
+      customerMessage,
       recentMessages,
+      isFirstCustomerChat,
+      humanHandback: false,
     });
 
     const cleanSuggestion = cleanString(suggestion);
