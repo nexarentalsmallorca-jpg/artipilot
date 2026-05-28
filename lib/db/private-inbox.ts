@@ -41,6 +41,8 @@ export type ApiMessage = {
   message_type: ApiMessageType;
   media_id: string | null;
   media_url: string | null;
+  media_filename: string | null;
+  mime_type: string | null;
   english_translation: string | null;
   detected_language: string | null;
   translation_status: string | null;
@@ -57,6 +59,16 @@ function nullableString(value: unknown) {
 
 function booleanValue(value: unknown) {
   return value === true;
+}
+
+function numberValue(value: unknown, fallback = 0) {
+  const number = Number(value);
+
+  if (Number.isNaN(number)) {
+    return fallback;
+  }
+
+  return number;
 }
 
 function isSchemaError(error: unknown) {
@@ -182,6 +194,24 @@ function getMediaUrl(row: Record<string, unknown>) {
   );
 }
 
+function getMediaFilename(row: Record<string, unknown>) {
+  return (
+    (row.media_filename as string) ??
+    (row.filename as string) ??
+    (row.file_name as string) ??
+    null
+  );
+}
+
+function getMimeType(row: Record<string, unknown>) {
+  return (
+    (row.mime_type as string) ??
+    (row.media_mime_type as string) ??
+    (row.content_type as string) ??
+    null
+  );
+}
+
 function getEnglishTranslation(row: Record<string, unknown>) {
   return (
     (row.english_translation as string) ??
@@ -234,6 +264,10 @@ function getMediaPreview(messageType: ApiMessageType, body?: string | null) {
     return "🏷️ Sticker";
   }
 
+  if (messageType === "location") {
+    return "📍 Location";
+  }
+
   return "New message";
 }
 
@@ -275,7 +309,7 @@ export function normalizeContactRow(row: Record<string, unknown>): ApiContact {
     ai_enabled: row.ai_enabled === false ? false : true,
     last_message: (row.last_message as string) ?? null,
     last_message_at: (row.last_message_at as string) ?? null,
-    unread_count: Number(row.unread_count || 0),
+    unread_count: numberValue(row.unread_count, 0),
     blocked: booleanValue(row.blocked),
     needs_human_attention: booleanValue(row.needs_human_attention),
     human_attention_reason: (row.human_attention_reason as string) ?? null,
@@ -299,6 +333,8 @@ export function normalizeMessageRow(row: Record<string, unknown>): ApiMessage {
     message_type: messageType,
     media_id: getMediaId(row),
     media_url: getMediaUrl(row),
+    media_filename: getMediaFilename(row),
+    mime_type: getMimeType(row),
     english_translation: getEnglishTranslation(row),
     detected_language: getDetectedLanguage(row),
     translation_status: getTranslationStatus(row),
@@ -360,6 +396,47 @@ async function updateContactWithFallback(
   }
 }
 
+async function updateContactAndReturnWithFallback(
+  db: SupabaseClient,
+  contactId: string,
+  modern: Record<string, unknown>,
+  fallback?: Record<string, unknown>
+): Promise<ApiContact> {
+  const primary = await db
+    .from("artipilot_contacts")
+    .update(modern)
+    .eq("id", contactId)
+    .select("*")
+    .single();
+
+  if (!primary.error && primary.data) {
+    return normalizeContactRow(primary.data as Record<string, unknown>);
+  }
+
+  if (!isSchemaError(primary.error)) {
+    throw primary.error;
+  }
+
+  if (fallback) {
+    const secondary = await db
+      .from("artipilot_contacts")
+      .update(fallback)
+      .eq("id", contactId)
+      .select("*")
+      .single();
+
+    if (!secondary.error && secondary.data) {
+      return normalizeContactRow(secondary.data as Record<string, unknown>);
+    }
+
+    if (!isSchemaError(secondary.error)) {
+      throw secondary.error;
+    }
+  }
+
+  return getContactById(contactId);
+}
+
 async function insertMessageWithFallback(
   db: SupabaseClient,
   payloads: Record<string, unknown>[]
@@ -393,6 +470,7 @@ export async function listContacts(): Promise<ApiContact[]> {
   const primary = await db
     .from("artipilot_contacts")
     .select("*")
+    .order("blocked", { ascending: true })
     .order("needs_human_attention", { ascending: false })
     .order("last_message_at", { ascending: false, nullsFirst: false });
 
@@ -415,16 +493,16 @@ export async function listContacts(): Promise<ApiContact[]> {
   return (fallback.data || [])
     .map((row) => normalizeContactRow(row as Record<string, unknown>))
     .sort((a, b) => {
+      if (a.blocked !== b.blocked) {
+        return a.blocked ? 1 : -1;
+      }
+
       if (a.needs_human_attention !== b.needs_human_attention) {
         return a.needs_human_attention ? -1 : 1;
       }
 
-      const aTime = a.last_message_at
-        ? new Date(a.last_message_at).getTime()
-        : 0;
-      const bTime = b.last_message_at
-        ? new Date(b.last_message_at).getTime()
-        : 0;
+      const aTime = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+      const bTime = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
 
       return bTime - aTime;
     });
@@ -463,9 +541,7 @@ export async function listMessagesForContact(
       .order("created_at", { ascending: true });
 
     if (!byContactPhone.error) {
-      allRows.push(
-        ...((byContactPhone.data || []) as Record<string, unknown>[])
-      );
+      allRows.push(...((byContactPhone.data || []) as Record<string, unknown>[]));
       continue;
     }
 
@@ -534,102 +610,49 @@ export async function updateContactAi(
     modernUpdates.human_attention_at = null;
   }
 
-  const primary = await db
-    .from("artipilot_contacts")
-    .update(modernUpdates)
-    .eq("id", contactId)
-    .select("*")
-    .single();
-
-  if (!primary.error && primary.data) {
-    return normalizeContactRow(primary.data as Record<string, unknown>);
-  }
-
-  if (!isSchemaError(primary.error)) {
-    throw primary.error;
-  }
-
-  const fallback = await db
-    .from("artipilot_contacts")
-    .update({
+  return updateContactAndReturnWithFallback(
+    db,
+    contactId,
+    modernUpdates,
+    {
       ai_enabled: aiEnabled,
-    })
-    .eq("id", contactId)
-    .select("*")
-    .single();
-
-  if (fallback.error) {
-    throw fallback.error;
-  }
-
-  return normalizeContactRow(fallback.data as Record<string, unknown>);
+    }
+  );
 }
 
 export async function blockContact(contactId: string): Promise<ApiContact> {
   const db = getSupabaseAdmin();
   const now = new Date().toISOString();
 
-  const primary = await db
-    .from("artipilot_contacts")
-    .update({
+  return updateContactAndReturnWithFallback(
+    db,
+    contactId,
+    {
       blocked: true,
       ai_enabled: false,
       needs_human_attention: false,
       human_attention_reason: null,
       human_attention_at: null,
       updated_at: now,
-    })
-    .eq("id", contactId)
-    .select("*")
-    .single();
-
-  if (!primary.error && primary.data) {
-    return normalizeContactRow(primary.data as Record<string, unknown>);
-  }
-
-  if (!isSchemaError(primary.error)) {
-    throw primary.error;
-  }
-
-  const fallback = await db
-    .from("artipilot_contacts")
-    .update({
+    },
+    {
       ai_enabled: false,
-    })
-    .eq("id", contactId)
-    .select("*")
-    .single();
-
-  if (fallback.error) {
-    throw fallback.error;
-  }
-
-  return normalizeContactRow(fallback.data as Record<string, unknown>);
+    }
+  );
 }
 
 export async function unblockContact(contactId: string): Promise<ApiContact> {
   const db = getSupabaseAdmin();
   const now = new Date().toISOString();
 
-  const primary = await db
-    .from("artipilot_contacts")
-    .update({
+  return updateContactAndReturnWithFallback(
+    db,
+    contactId,
+    {
       blocked: false,
       updated_at: now,
-    })
-    .eq("id", contactId)
-    .select("*")
-    .single();
-
-  if (!primary.error && primary.data) {
-    return normalizeContactRow(primary.data as Record<string, unknown>);
-  }
-
-  if (!isSchemaError(primary.error)) {
-    throw primary.error;
-  }
-
-  return getContactById(contactId);
+    }
+  );
 }
 
 export async function markContactHumanAttention(
@@ -642,41 +665,20 @@ export async function markContactHumanAttention(
     nullableString(reason) ||
     "Customer requested human/team support or needs manual review.";
 
-  const primary = await db
-    .from("artipilot_contacts")
-    .update({
+  return updateContactAndReturnWithFallback(
+    db,
+    contactId,
+    {
       needs_human_attention: true,
       human_attention_reason: cleanReason,
       human_attention_at: now,
       ai_enabled: false,
       updated_at: now,
-    })
-    .eq("id", contactId)
-    .select("*")
-    .single();
-
-  if (!primary.error && primary.data) {
-    return normalizeContactRow(primary.data as Record<string, unknown>);
-  }
-
-  if (!isSchemaError(primary.error)) {
-    throw primary.error;
-  }
-
-  const fallback = await db
-    .from("artipilot_contacts")
-    .update({
+    },
+    {
       ai_enabled: false,
-    })
-    .eq("id", contactId)
-    .select("*")
-    .single();
-
-  if (fallback.error) {
-    throw fallback.error;
-  }
-
-  return normalizeContactRow(fallback.data as Record<string, unknown>);
+    }
+  );
 }
 
 export async function clearContactHumanAttention(
@@ -685,27 +687,16 @@ export async function clearContactHumanAttention(
   const db = getSupabaseAdmin();
   const now = new Date().toISOString();
 
-  const primary = await db
-    .from("artipilot_contacts")
-    .update({
+  return updateContactAndReturnWithFallback(
+    db,
+    contactId,
+    {
       needs_human_attention: false,
       human_attention_reason: null,
       human_attention_at: null,
       updated_at: now,
-    })
-    .eq("id", contactId)
-    .select("*")
-    .single();
-
-  if (!primary.error && primary.data) {
-    return normalizeContactRow(primary.data as Record<string, unknown>);
-  }
-
-  if (!isSchemaError(primary.error)) {
-    throw primary.error;
-  }
-
-  return getContactById(contactId);
+    }
+  );
 }
 
 export async function deleteMessage(messageId: string) {
@@ -774,6 +765,8 @@ export async function insertOutboundMessage(params: {
   messageType?: ApiMessageType;
   mediaId?: string | null;
   mediaUrl?: string | null;
+  mediaFilename?: string | null;
+  mimeType?: string | null;
   raw?: unknown;
   englishTranslation?: string | null;
   detectedLanguage?: string | null;
@@ -786,10 +779,10 @@ export async function insertOutboundMessage(params: {
   const messageType =
     params.messageType || (senderType === "system" ? "system" : "text");
   const now = new Date().toISOString();
-
   const errorText = params.statusError ?? params.deliveryError ?? null;
 
   const fullPayload = {
+    contact_id: params.contactId,
     contact_phone: phone,
     whatsapp_message_id: params.whatsappMessageId ?? null,
     role: mapSenderTypeToRole(senderType),
@@ -799,6 +792,8 @@ export async function insertOutboundMessage(params: {
     content: params.body,
     media_id: params.mediaId ?? null,
     media_url: params.mediaUrl ?? null,
+    media_filename: params.mediaFilename ?? null,
+    mime_type: params.mimeType ?? null,
     english_translation: params.englishTranslation ?? null,
     detected_language: params.detectedLanguage ?? null,
     translation_status: params.translationStatus ?? null,
@@ -819,6 +814,8 @@ export async function insertOutboundMessage(params: {
     content: params.body,
     media_id: params.mediaId ?? null,
     media_url: params.mediaUrl ?? null,
+    media_filename: params.mediaFilename ?? null,
+    mime_type: params.mimeType ?? null,
     english_translation: params.englishTranslation ?? null,
     detected_language: params.detectedLanguage ?? null,
     translation_status: params.translationStatus ?? null,
@@ -895,6 +892,22 @@ export async function updateOutboundMessage(
     fullUpdates.media_url = updates.media_url;
   }
 
+  if ("media_filename" in updates) {
+    fullUpdates.media_filename = updates.media_filename;
+  }
+
+  if ("mediaFilename" in updates) {
+    fullUpdates.media_filename = updates.mediaFilename;
+  }
+
+  if ("mime_type" in updates) {
+    fullUpdates.mime_type = updates.mime_type;
+  }
+
+  if ("mimeType" in updates) {
+    fullUpdates.mime_type = updates.mimeType;
+  }
+
   if ("raw_payload" in updates) {
     fullUpdates.raw_payload = updates.raw_payload;
   }
@@ -968,6 +981,14 @@ export async function updateOutboundMessage(
     simpleUpdates.media_url = fullUpdates.media_url;
   }
 
+  if ("media_filename" in fullUpdates) {
+    simpleUpdates.media_filename = fullUpdates.media_filename;
+  }
+
+  if ("mime_type" in fullUpdates) {
+    simpleUpdates.mime_type = fullUpdates.mime_type;
+  }
+
   if ("english_translation" in fullUpdates) {
     simpleUpdates.english_translation = fullUpdates.english_translation;
   }
@@ -1029,6 +1050,8 @@ export async function insertInboundMessage(params: {
   messageType?: ApiMessageType;
   mediaId?: string | null;
   mediaUrl?: string | null;
+  mediaFilename?: string | null;
+  mimeType?: string | null;
   englishTranslation?: string | null;
   detectedLanguage?: string | null;
   translationStatus?: string | null;
@@ -1040,6 +1063,7 @@ export async function insertInboundMessage(params: {
   const messageType = params.messageType || "text";
 
   const fullPayload = {
+    contact_id: params.contactId,
     contact_phone: phone,
     whatsapp_message_id: params.waMessageId || null,
     role: "customer",
@@ -1049,6 +1073,8 @@ export async function insertInboundMessage(params: {
     content: params.body,
     media_id: params.mediaId ?? null,
     media_url: params.mediaUrl ?? null,
+    media_filename: params.mediaFilename ?? null,
+    mime_type: params.mimeType ?? null,
     english_translation: params.englishTranslation ?? null,
     detected_language: params.detectedLanguage ?? null,
     translation_status: params.translationStatus ?? null,
@@ -1067,6 +1093,8 @@ export async function insertInboundMessage(params: {
     content: params.body,
     media_id: params.mediaId ?? null,
     media_url: params.mediaUrl ?? null,
+    media_filename: params.mediaFilename ?? null,
+    mime_type: params.mimeType ?? null,
     english_translation: params.englishTranslation ?? null,
     detected_language: params.detectedLanguage ?? null,
     translation_status: params.translationStatus ?? null,
@@ -1098,7 +1126,7 @@ export async function insertInboundMessage(params: {
     .maybeSingle();
 
   if (!contactResult.error && contactResult.data) {
-    unreadCount = Number(contactResult.data.unread_count || 0) + 1;
+    unreadCount = numberValue(contactResult.data.unread_count, 0) + 1;
   }
 
   const preview = getMediaPreview(messageType, params.body);
