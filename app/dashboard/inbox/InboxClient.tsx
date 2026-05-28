@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ChatList, { type Contact } from "@/components/inbox/ChatList";
+import ChatList, {
+  type ChatFilter,
+  type Contact,
+} from "@/components/inbox/ChatList";
 import ChatWindow, { type Message } from "@/components/inbox/ChatWindow";
 import MessageComposer from "@/components/inbox/MessageComposer";
 import {
@@ -12,8 +15,6 @@ import {
   suggestAiAction,
   toggleAiAction,
 } from "./actions";
-
-type Filter = "all" | "unread" | "ai_on" | "ai_off";
 
 type QuickReply = {
   id: string;
@@ -48,7 +49,10 @@ function sameMessageList(previous: Message[], next: Message[]) {
     previousLast.created_at === nextLast.created_at &&
     previousLast.message_type === nextLast.message_type &&
     previousLast.media_id === nextLast.media_id &&
-    previousLast.media_url === nextLast.media_url
+    previousLast.media_url === nextLast.media_url &&
+    previousLast.english_translation === nextLast.english_translation &&
+    previousLast.detected_language === nextLast.detected_language &&
+    previousLast.translation_status === nextLast.translation_status
   );
 }
 
@@ -86,16 +90,9 @@ export default function InboxClient({
 }) {
   const [contacts, setContacts] = useState<Contact[]>(initialContacts);
   const [messages, setMessages] = useState<Message[]>([]);
-
-  /**
-   * IMPORTANT:
-   * Keep this NULL by default.
-   * This prevents the app/PWA/mobile shortcut from auto-opening the first chat,
-   * especially your own Sahil/Sahin self-chat.
-   */
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter, setFilter] = useState<ChatFilter>("all");
   const [search, setSearch] = useState("");
   const [loadingContacts, setLoadingContacts] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -120,6 +117,10 @@ export default function InboxClient({
       contacts.find((contact) => getContactKey(contact) === selectedId) || null
     );
   }, [contacts, selectedId]);
+
+  const selectedBlocked = selected?.blocked === true;
+  const selectedNeedsHumanAttention =
+    selected?.needs_human_attention === true;
 
   const loadContacts = useCallback(async (silent = false) => {
     if (loadingContactsRef.current) {
@@ -148,12 +149,6 @@ export default function InboxClient({
       setContacts(nextContacts);
       setLoadError(null);
 
-      /**
-       * IMPORTANT:
-       * Do NOT auto-select the first contact.
-       * Only keep the selected chat if it still exists.
-       * If the selected chat disappears, go back to inbox list.
-       */
       setSelectedId((currentSelectedId) => {
         if (!currentSelectedId) {
           return null;
@@ -210,10 +205,6 @@ export default function InboxClient({
 
         const result = await fetchMessagesAction(contactId);
 
-        /**
-         * If user switched chat while this request was loading,
-         * do not overwrite the new selected chat messages.
-         */
         if (selectedIdRef.current !== contactId) {
           return;
         }
@@ -256,6 +247,19 @@ export default function InboxClient({
     []
   );
 
+  const refreshInbox = useCallback(
+    async (silent = true) => {
+      await loadContacts(silent);
+
+      const currentSelectedId = selectedIdRef.current;
+
+      if (currentSelectedId) {
+        await loadMessages(currentSelectedId, silent);
+      }
+    },
+    [loadContacts, loadMessages]
+  );
+
   useEffect(() => {
     void loadContacts();
     void loadQuickReplies();
@@ -268,6 +272,18 @@ export default function InboxClient({
       window.clearInterval(contactsTimer);
     };
   }, [loadContacts, loadQuickReplies]);
+
+  useEffect(() => {
+    function handleCustomRefresh() {
+      void refreshInbox(true);
+    }
+
+    window.addEventListener("artipilot:inbox-refresh", handleCustomRefresh);
+
+    return () => {
+      window.removeEventListener("artipilot:inbox-refresh", handleCustomRefresh);
+    };
+  }, [refreshInbox]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -311,6 +327,10 @@ export default function InboxClient({
       throw new Error("Select a conversation first.");
     }
 
+    if (selectedBlocked) {
+      throw new Error("This customer is blocked. Unblock them before sending.");
+    }
+
     const cleanBody = body.trim();
 
     if (!cleanBody) {
@@ -334,6 +354,10 @@ export default function InboxClient({
       throw new Error("Select a conversation first.");
     }
 
+    if (selectedBlocked) {
+      throw new Error("This customer is blocked. Unblock them before sending.");
+    }
+
     if (!file) {
       throw new Error("Select a file first.");
     }
@@ -349,7 +373,7 @@ export default function InboxClient({
       formData.append("message", caption.trim());
     }
 
-    const response = await fetch("/api/whatsapp/send", {
+    const response = await fetch("/api/private/send", {
       method: "POST",
       body: formData,
     });
@@ -377,6 +401,10 @@ export default function InboxClient({
       return null;
     }
 
+    if (selectedBlocked) {
+      throw new Error("This customer is blocked.");
+    }
+
     const result = await suggestAiAction(selectedId);
 
     if (result.error) {
@@ -388,6 +416,11 @@ export default function InboxClient({
 
   async function handleToggleAi() {
     if (!selected) {
+      return;
+    }
+
+    if (selectedBlocked) {
+      setMessageError("This customer is blocked. Unblock them before enabling AI.");
       return;
     }
 
@@ -403,7 +436,17 @@ export default function InboxClient({
     setContacts((previousContacts) =>
       previousContacts.map((contact) =>
         getContactKey(contact) === contactKey
-          ? { ...contact, ai_enabled: nextValue }
+          ? {
+              ...contact,
+              ai_enabled: nextValue,
+              needs_human_attention: nextValue
+                ? false
+                : contact.needs_human_attention,
+              human_attention_reason: nextValue
+                ? null
+                : contact.human_attention_reason,
+              human_attention_at: nextValue ? null : contact.human_attention_at,
+            }
           : contact
       )
     );
@@ -424,6 +467,8 @@ export default function InboxClient({
           )
         );
       }
+
+      void loadContacts(true);
     } catch (error) {
       console.error("Failed to toggle AI:", error);
 
@@ -502,8 +547,19 @@ export default function InboxClient({
               <p className="truncate text-sm font-semibold text-[#111b21]">
                 {selected.name || selected.profile_name || selected.phone}
               </p>
-              <p className="text-xs text-[#667781]">
-                AI {selected.ai_enabled ? "on" : "off"}
+              <p
+                className={[
+                  "text-xs",
+                  selectedBlocked || selectedNeedsHumanAttention
+                    ? "font-bold text-red-600"
+                    : "text-[#667781]",
+                ].join(" ")}
+              >
+                {selectedBlocked
+                  ? "Blocked"
+                  : selectedNeedsHumanAttention
+                    ? "Needs human attention"
+                    : `AI ${selected.ai_enabled ? "on" : "off"}`}
               </p>
             </div>
           </div>
@@ -524,6 +580,8 @@ export default function InboxClient({
           onSend={handleSend}
           onAiSuggest={handleAiSuggest}
           onSendMedia={handleSendMedia}
+          blocked={selectedBlocked}
+          needsHumanAttention={selectedNeedsHumanAttention}
         />
       </main>
 

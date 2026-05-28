@@ -18,6 +18,12 @@ export type Message = {
   translation_status?: string | null;
 };
 
+type ActionState = {
+  blocked?: boolean | null;
+  needs_human_attention?: boolean | null;
+  human_attention_reason?: string | null;
+};
+
 function cleanString(value: unknown) {
   return String(value || "").trim();
 }
@@ -220,6 +226,20 @@ function linkifyText(text: string) {
   });
 }
 
+async function readApiError(response: Response, fallback: string) {
+  try {
+    const data = await response.json();
+
+    if (data?.error) {
+      return String(data.error);
+    }
+  } catch {
+    // Ignore JSON parse error.
+  }
+
+  return fallback;
+}
+
 function TranslationBlock({ message }: { message: Message }) {
   if (!shouldShowEnglishTranslation(message)) {
     return null;
@@ -312,9 +332,7 @@ function MediaContent({ message }: { message: Message }) {
           <span className="block truncate text-sm font-bold text-[#111b21]">
             {fileName}
           </span>
-          <span className="mt-0.5 block text-xs text-[#667781]">
-            Open file
-          </span>
+          <span className="mt-0.5 block text-xs text-[#667781]">Open file</span>
         </span>
       </a>
     );
@@ -342,17 +360,37 @@ export default function ChatWindow({
 
   const [userIsNearBottom, setUserIsNearBottom] = useState(true);
   const [showNewMessagesButton, setShowNewMessagesButton] = useState(false);
+  const [chatMenuOpen, setChatMenuOpen] = useState(false);
+  const [messageMenuId, setMessageMenuId] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [hiddenMessageIds, setHiddenMessageIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [localState, setLocalState] = useState<ActionState>({});
 
   const contactId = contact?.id || contact?.phone || null;
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   const lastMessageId = lastMessage?.id || null;
 
-  const shouldShowFullLoading = loading && messages.length === 0;
+  const currentBlocked = Boolean(localState.blocked ?? contact?.blocked);
+  const currentNeedsHuman = Boolean(
+    localState.needs_human_attention ?? contact?.needs_human_attention
+  );
+  const currentHumanReason =
+    localState.human_attention_reason ?? contact?.human_attention_reason ?? null;
+
+  const visibleMessages = useMemo(
+    () => messages.filter((message) => !hiddenMessageIds.has(message.id)),
+    [messages, hiddenMessageIds]
+  );
+
+  const shouldShowFullLoading = loading && visibleMessages.length === 0;
 
   const groupedMessages = useMemo(() => {
     let lastDateLabel = "";
 
-    return messages.map((message) => {
+    return visibleMessages.map((message) => {
       const dateLabel = formatHeaderDate(message.created_at);
       const showDateLabel = Boolean(dateLabel && dateLabel !== lastDateLabel);
 
@@ -366,7 +404,138 @@ export default function ChatWindow({
         showDateLabel,
       };
     });
-  }, [messages]);
+  }, [visibleMessages]);
+
+  function refreshSoon() {
+    window.dispatchEvent(new CustomEvent("artipilot:inbox-refresh"));
+  }
+
+  async function patchContact(payload: Record<string, unknown>) {
+    if (!contact?.id) {
+      return;
+    }
+
+    setBusyAction("contact");
+    setActionError(null);
+
+    try {
+      const response = await fetch("/api/private/contacts", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contact_id: contact.id,
+          ...payload,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "Contact update failed."));
+      }
+
+      const data = await response.json();
+
+      if (data?.contact) {
+        setLocalState({
+          blocked: data.contact.blocked,
+          needs_human_attention: data.contact.needs_human_attention,
+          human_attention_reason: data.contact.human_attention_reason,
+        });
+      }
+
+      setChatMenuOpen(false);
+      refreshSoon();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "Contact update failed."
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function deleteSingleMessage(messageId: string) {
+    const confirmed = window.confirm("Delete this message from your inbox?");
+
+    if (!confirmed) {
+      return;
+    }
+
+    setBusyAction(`message:${messageId}`);
+    setActionError(null);
+
+    try {
+      const response = await fetch("/api/private/messages", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          message_id: messageId,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "Failed to delete message."));
+      }
+
+      setHiddenMessageIds((current) => {
+        const next = new Set(current);
+        next.add(messageId);
+        return next;
+      });
+
+      setMessageMenuId(null);
+      refreshSoon();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "Failed to delete message."
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function deleteWholeChat() {
+    if (!contact?.id) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete the full chat with ${displayName(contact)}? This removes the conversation from your private inbox.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setBusyAction("delete-chat");
+    setActionError(null);
+
+    try {
+      const response = await fetch("/api/private/chat", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contact_id: contact.id,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "Failed to delete chat."));
+      }
+
+      window.location.href = "/dashboard/inbox";
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "Failed to delete chat."
+      );
+      setBusyAction(null);
+    }
+  }
 
   function scrollToBottom(behavior: ScrollBehavior = "smooth") {
     requestAnimationFrame(() => {
@@ -386,6 +555,14 @@ export default function ChatWindow({
       setShowNewMessagesButton(false);
     }
   }
+
+  useEffect(() => {
+    setLocalState({});
+    setHiddenMessageIds(new Set());
+    setActionError(null);
+    setChatMenuOpen(false);
+    setMessageMenuId(null);
+  }, [contactId]);
 
   useEffect(() => {
     if (!contactId) {
@@ -459,9 +636,124 @@ export default function ChatWindow({
     );
   }
 
+  const chatMenu = (
+    <div className="absolute right-0 top-11 z-40 w-64 overflow-hidden rounded-2xl border border-[#d1d7db] bg-white text-sm shadow-2xl">
+      <button
+        type="button"
+        disabled={busyAction === "contact"}
+        onClick={() =>
+          patchContact({
+            needs_human_attention: true,
+            human_attention_reason:
+              "Marked manually for human attention from the inbox.",
+          })
+        }
+        className="block w-full px-4 py-3 text-left font-bold text-red-700 transition hover:bg-red-50 disabled:opacity-50"
+      >
+        Mark needs human attention
+      </button>
+
+      <button
+        type="button"
+        disabled={busyAction === "contact"}
+        onClick={() =>
+          patchContact({
+            needs_human_attention: false,
+          })
+        }
+        className="block w-full px-4 py-3 text-left font-bold text-[#54656f] transition hover:bg-[#f5f6f6] disabled:opacity-50"
+      >
+        Clear human attention
+      </button>
+
+      <button
+        type="button"
+        disabled={busyAction === "contact"}
+        onClick={() =>
+          patchContact({
+            blocked: !currentBlocked,
+          })
+        }
+        className="block w-full px-4 py-3 text-left font-bold text-[#54656f] transition hover:bg-[#f5f6f6] disabled:opacity-50"
+      >
+        {currentBlocked ? "Unblock customer" : "Block customer"}
+      </button>
+
+      <button
+        type="button"
+        disabled={busyAction === "delete-chat"}
+        onClick={() => void deleteWholeChat()}
+        className="block w-full border-t border-[#e9edef] px-4 py-3 text-left font-black text-red-700 transition hover:bg-red-50 disabled:opacity-50"
+      >
+        Delete whole chat
+      </button>
+    </div>
+  );
+
   return (
     <div className="flex h-full flex-1 flex-col bg-[#efeae2]">
-      <header className="hidden items-center justify-between border-b border-[#d1d7db] bg-[#f0f2f5] px-4 py-2.5 md:flex">
+      <header className="flex shrink-0 items-center justify-between border-b border-[#d1d7db] bg-[#f0f2f5] px-3 py-2 md:hidden">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#dfe5e7] text-sm font-bold text-[#54656f]">
+            {getInitial(contact)}
+
+            <span
+              className={[
+                "absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-[#f0f2f5]",
+                currentBlocked
+                  ? "bg-red-500"
+                  : contact.ai_enabled
+                    ? "bg-[#00a884]"
+                    : "bg-[#8696a0]",
+              ].join(" ")}
+            />
+          </div>
+
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-black text-[#111b21]">
+              {displayName(contact)}
+            </h2>
+
+            <p className="truncate text-[11px] text-[#667781]">
+              {currentBlocked
+                ? "Blocked"
+                : currentNeedsHuman
+                  ? "Needs human attention"
+                  : contact.phone}
+            </p>
+          </div>
+        </div>
+
+        <div className="relative flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={onToggleAi}
+            disabled={currentBlocked}
+            className={[
+              "rounded-full px-3 py-1.5 text-xs font-black transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50",
+              contact.ai_enabled && !currentBlocked
+                ? "bg-[#d9fdd3] text-[#008069]"
+                : "bg-[#e9edef] text-[#54656f]",
+            ].join(" ")}
+          >
+            AI {contact.ai_enabled && !currentBlocked ? "ON" : "OFF"}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setChatMenuOpen((open) => !open)}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-[#54656f] transition hover:bg-[#e9edef]"
+            title="Chat options"
+            aria-label="Chat options"
+          >
+            ⋮
+          </button>
+
+          {chatMenuOpen ? chatMenu : null}
+        </div>
+      </header>
+
+      <header className="hidden shrink-0 items-center justify-between border-b border-[#d1d7db] bg-[#f0f2f5] px-4 py-2.5 md:flex">
         <div className="flex min-w-0 items-center gap-3">
           <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#dfe5e7] text-base font-bold text-[#54656f]">
             {getInitial(contact)}
@@ -469,9 +761,19 @@ export default function ChatWindow({
             <span
               className={[
                 "absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-[#f0f2f5]",
-                contact.ai_enabled ? "bg-[#00a884]" : "bg-[#8696a0]",
+                currentBlocked
+                  ? "bg-red-500"
+                  : contact.ai_enabled
+                    ? "bg-[#00a884]"
+                    : "bg-[#8696a0]",
               ].join(" ")}
-              title={contact.ai_enabled ? "AI On" : "AI Off"}
+              title={
+                currentBlocked
+                  ? "Blocked"
+                  : contact.ai_enabled
+                    ? "AI On"
+                    : "AI Off"
+              }
             />
           </div>
 
@@ -480,42 +782,75 @@ export default function ChatWindow({
               {displayName(contact)}
             </h2>
 
-            <p className="truncate text-xs text-[#667781]">{contact.phone}</p>
+            <p className="truncate text-xs text-[#667781]">
+              {currentBlocked
+                ? "Blocked customer"
+                : currentNeedsHuman
+                  ? "Needs human attention"
+                  : contact.phone}
+            </p>
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="relative flex shrink-0 items-center gap-2">
           <button
             type="button"
             onClick={onToggleAi}
+            disabled={currentBlocked}
             className={[
-              "rounded-full px-4 py-2 text-xs font-bold transition active:scale-[0.98]",
-              contact.ai_enabled
+              "rounded-full px-4 py-2 text-xs font-bold transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50",
+              contact.ai_enabled && !currentBlocked
                 ? "bg-[#d9fdd3] text-[#008069] hover:bg-[#c8f7c0]"
                 : "bg-[#e9edef] text-[#54656f] hover:bg-[#dce1e3]",
             ].join(" ")}
             title={
-              contact.ai_enabled
-                ? "AI auto-replies are active for this contact"
-                : "AI auto-replies are off for this contact"
+              currentBlocked
+                ? "Customer is blocked"
+                : contact.ai_enabled
+                  ? "AI auto-replies are active for this contact"
+                  : "AI auto-replies are off for this contact"
             }
           >
-            AI {contact.ai_enabled ? "ON" : "OFF"}
+            AI {contact.ai_enabled && !currentBlocked ? "ON" : "OFF"}
           </button>
 
           <button
             type="button"
+            onClick={() => setChatMenuOpen((open) => !open)}
             className="flex h-9 w-9 items-center justify-center rounded-full text-[#54656f] transition hover:bg-[#e9edef]"
             title="Chat options"
             aria-label="Chat options"
           >
             ⋮
           </button>
+
+          {chatMenuOpen ? chatMenu : null}
         </div>
       </header>
 
+      {actionError ? (
+        <div className="shrink-0 border-b border-red-200 bg-red-50 px-4 py-2 text-xs font-bold text-red-700">
+          {actionError}
+        </div>
+      ) : null}
+
+      {currentNeedsHuman ? (
+        <div className="shrink-0 border-b border-red-200 bg-red-50 px-4 py-2 text-xs leading-5 text-red-800">
+          <span className="font-black">Needs human attention.</span>{" "}
+          {currentHumanReason ||
+            "This customer should be reviewed by the team manually."}
+        </div>
+      ) : null}
+
+      {currentBlocked ? (
+        <div className="shrink-0 border-b border-red-200 bg-red-50 px-4 py-2 text-xs leading-5 text-red-800">
+          <span className="font-black">Blocked customer.</span> AI replies are
+          off. Be careful before sending manual messages.
+        </div>
+      ) : null}
+
       <div className="relative min-h-0 flex-1">
-        {loading && messages.length > 0 ? (
+        {loading && visibleMessages.length > 0 ? (
           <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded-full border border-[#d1d7db] bg-white/95 px-3 py-1 text-[11px] font-bold text-[#667781] shadow-lg">
             Syncing...
           </div>
@@ -537,7 +872,7 @@ export default function ChatWindow({
         <div
           ref={scrollContainerRef}
           onScroll={handleScroll}
-          className="h-full overflow-y-auto bg-[#efeae2] px-3 py-4 md:px-8"
+          className="h-full overflow-y-auto bg-[#efeae2] px-3 py-3 md:px-8 md:py-4"
         >
           {shouldShowFullLoading ? (
             <div className="flex h-full items-center justify-center text-center">
@@ -546,7 +881,7 @@ export default function ChatWindow({
                 <p className="text-sm text-[#667781]">Loading messages...</p>
               </div>
             </div>
-          ) : messages.length === 0 ? (
+          ) : visibleMessages.length === 0 ? (
             <div className="flex h-full items-center justify-center px-6 text-center">
               <div className="max-w-sm rounded-3xl border border-[#d1d7db] bg-white/80 p-6 shadow-sm">
                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-[#d9fdd3] text-xl">
@@ -575,6 +910,7 @@ export default function ChatWindow({
                 const isFailed = message.status?.toLowerCase() === "failed";
                 const hasMedia = Boolean(message.media_url);
                 const type = normalizeMessageType(message);
+                const messageBusy = busyAction === `message:${message.id}`;
 
                 return (
                   <div key={message.id}>
@@ -588,7 +924,7 @@ export default function ChatWindow({
 
                     <div
                       className={[
-                        "flex w-full",
+                        "group flex w-full",
                         isSystem
                           ? "justify-center"
                           : outbound
@@ -598,7 +934,7 @@ export default function ChatWindow({
                     >
                       <div
                         className={[
-                          "max-w-[86%] px-3 py-2 text-sm shadow-sm md:max-w-[74%]",
+                          "relative max-w-[86%] px-3 py-2 text-sm shadow-sm md:max-w-[74%]",
                           isSystem
                             ? "rounded-xl bg-white/80 text-center text-[#667781]"
                             : outbound
@@ -608,10 +944,43 @@ export default function ChatWindow({
                           hasMedia ? "min-w-[230px]" : "",
                         ].join(" ")}
                       >
+                        {!isSystem ? (
+                          <div className="absolute right-1 top-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setMessageMenuId((current) =>
+                                  current === message.id ? null : message.id
+                                )
+                              }
+                              className="flex h-6 w-6 items-center justify-center rounded-full text-[#667781] opacity-0 transition hover:bg-black/5 group-hover:opacity-100"
+                              title="Message options"
+                              aria-label="Message options"
+                            >
+                              ⋮
+                            </button>
+
+                            {messageMenuId === message.id ? (
+                              <div className="absolute right-0 top-7 z-30 w-40 overflow-hidden rounded-xl border border-[#d1d7db] bg-white text-xs shadow-xl">
+                                <button
+                                  type="button"
+                                  disabled={messageBusy}
+                                  onClick={() =>
+                                    void deleteSingleMessage(message.id)
+                                  }
+                                  className="block w-full px-3 py-2 text-left font-black text-red-700 transition hover:bg-red-50 disabled:opacity-50"
+                                >
+                                  {messageBusy ? "Deleting..." : "Delete message"}
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+
                         {senderLabel ? (
                           <span
                             className={[
-                              "mb-1 block text-[10px] font-bold uppercase tracking-wide",
+                              "mb-1 block pr-6 text-[10px] font-bold uppercase tracking-wide",
                               message.sender_type === "ai"
                                 ? "text-[#008069]"
                                 : message.sender_type === "admin"

@@ -9,9 +9,13 @@ export type Contact = {
   last_message: string | null;
   last_message_at: string | null;
   unread_count: number;
+  blocked?: boolean | null;
+  needs_human_attention?: boolean | null;
+  human_attention_reason?: string | null;
+  human_attention_at?: string | null;
 };
 
-type Filter = "all" | "unread" | "ai_on" | "ai_off";
+export type ChatFilter = "all" | "unread" | "human" | "ai_on" | "ai_off";
 
 function displayName(contact: Contact) {
   return contact.name || contact.profile_name || contact.phone || "Unknown";
@@ -68,11 +72,13 @@ function contactMatchesSearch(contact: Contact, query: string) {
   const name = normalizeText(displayName(contact));
   const phone = normalizeText(contact.phone);
   const lastMessage = normalizeText(contact.last_message);
+  const reason = normalizeText(contact.human_attention_reason);
 
   return (
     name.includes(query) ||
     phone.includes(query) ||
-    lastMessage.includes(query)
+    lastMessage.includes(query) ||
+    reason.includes(query)
   );
 }
 
@@ -86,6 +92,14 @@ function getLastMessagePreview(contact: Contact) {
   return message;
 }
 
+function isHumanAttention(contact: Contact) {
+  return contact.needs_human_attention === true;
+}
+
+function isBlocked(contact: Contact) {
+  return contact.blocked === true;
+}
+
 export default function ChatList({
   contacts,
   selectedId,
@@ -97,16 +111,34 @@ export default function ChatList({
 }: {
   contacts: Contact[];
   selectedId: string | null;
-  filter: Filter;
+  filter: ChatFilter;
   search: string;
-  onFilterChange: (filter: Filter) => void;
+  onFilterChange: (filter: ChatFilter) => void;
   onSearchChange: (query: string) => void;
   onSelect: (id: string) => void;
 }) {
   const query = search.trim().toLowerCase();
 
-  const filteredContacts = contacts.filter((contact) => {
+  const sortedContacts = [...contacts].sort((a, b) => {
+    const aHuman = isHumanAttention(a) ? 1 : 0;
+    const bHuman = isHumanAttention(b) ? 1 : 0;
+
+    if (aHuman !== bHuman) {
+      return bHuman - aHuman;
+    }
+
+    const aTime = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+    const bTime = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+
+    return bTime - aTime;
+  });
+
+  const filteredContacts = sortedContacts.filter((contact) => {
     if (filter === "unread" && contact.unread_count <= 0) {
+      return false;
+    }
+
+    if (filter === "human" && !isHumanAttention(contact)) {
       return false;
     }
 
@@ -126,33 +158,38 @@ export default function ChatList({
     0
   );
 
+  const humanTotal = contacts.filter((contact) =>
+    isHumanAttention(contact)
+  ).length;
+
   const aiOnTotal = contacts.filter((contact) => contact.ai_enabled).length;
   const aiOffTotal = contacts.filter((contact) => !contact.ai_enabled).length;
 
-  const filters: { id: Filter; label: string; count?: number }[] = [
+  const filters: { id: ChatFilter; label: string; count?: number }[] = [
     { id: "all", label: "All", count: contacts.length },
     { id: "unread", label: "Unread", count: unreadTotal },
+    { id: "human", label: "Human", count: humanTotal },
     { id: "ai_on", label: "AI On", count: aiOnTotal },
     { id: "ai_off", label: "AI Off", count: aiOffTotal },
   ];
 
   return (
     <div className="flex h-full flex-col bg-white text-[#111b21]">
-      <header className="border-b border-[#e9edef] bg-white">
-        <div className="flex items-center justify-between gap-3 bg-[#f0f2f5] px-4 py-3">
+      <header className="shrink-0 border-b border-[#e9edef] bg-white">
+        <div className="flex items-center justify-between gap-3 bg-[#f0f2f5] px-3 py-2 md:px-4 md:py-3">
           <div className="min-w-0">
-            <h1 className="text-xl font-bold tracking-tight text-[#111b21]">
+            <h1 className="text-lg font-black tracking-tight text-[#111b21] md:text-xl">
               Chats
             </h1>
-            <p className="mt-0.5 text-xs text-[#667781]">
+            <p className="mt-0.5 hidden text-xs text-[#667781] sm:block">
               Artipilot private WhatsApp inbox
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 md:gap-2">
             <button
               type="button"
-              className="flex h-9 w-9 items-center justify-center rounded-full text-[#54656f] transition hover:bg-[#e9edef]"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-[#54656f] transition hover:bg-[#e9edef] md:h-9 md:w-9"
               title="New chat"
               aria-label="New chat"
             >
@@ -161,7 +198,7 @@ export default function ChatList({
 
             <button
               type="button"
-              className="flex h-9 w-9 items-center justify-center rounded-full text-[#54656f] transition hover:bg-[#e9edef]"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-[#54656f] transition hover:bg-[#e9edef] md:h-9 md:w-9"
               title="Menu"
               aria-label="Menu"
             >
@@ -176,7 +213,7 @@ export default function ChatList({
               value={search}
               onChange={(event) => onSearchChange(event.target.value)}
               placeholder="Search or start new chat"
-              className="w-full rounded-lg border border-transparent bg-[#f0f2f5] px-10 py-2.5 text-sm text-[#111b21] outline-none transition placeholder:text-[#667781] focus:border-[#00a884] focus:bg-white"
+              className="w-full rounded-lg border border-transparent bg-[#f0f2f5] px-10 py-2 text-sm text-[#111b21] outline-none transition placeholder:text-[#667781] focus:border-[#00a884] focus:bg-white md:py-2.5"
             />
 
             <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-[#667781]">
@@ -195,9 +232,10 @@ export default function ChatList({
             ) : null}
           </div>
 
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+          <div className="mt-2 flex gap-2 overflow-x-auto pb-1 md:mt-3">
             {filters.map((item) => {
               const active = filter === item.id;
+              const isHumanFilter = item.id === "human";
 
               return (
                 <button
@@ -205,10 +243,14 @@ export default function ChatList({
                   type="button"
                   onClick={() => onFilterChange(item.id)}
                   className={[
-                    "shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold transition",
-                    active
-                      ? "bg-[#e7fce3] text-[#008069]"
-                      : "bg-[#f0f2f5] text-[#54656f] hover:bg-[#e9edef]",
+                    "shrink-0 rounded-full px-3 py-1.5 text-xs font-black transition",
+                    active && isHumanFilter
+                      ? "bg-red-100 text-red-700"
+                      : active
+                        ? "bg-[#e7fce3] text-[#008069]"
+                        : isHumanFilter && item.count
+                          ? "bg-red-50 text-red-700 hover:bg-red-100"
+                          : "bg-[#f0f2f5] text-[#54656f] hover:bg-[#e9edef]",
                   ].join(" ")}
                 >
                   <span>{item.label}</span>
@@ -249,6 +291,8 @@ export default function ChatList({
             const name = displayName(contact);
             const time = formatTime(contact.last_message_at);
             const hasUnread = contact.unread_count > 0;
+            const needsHuman = isHumanAttention(contact);
+            const blocked = isBlocked(contact);
 
             return (
               <button
@@ -256,21 +300,36 @@ export default function ChatList({
                 type="button"
                 onClick={() => onSelect(contact.id)}
                 className={[
-                  "group flex w-full items-start gap-3 border-b border-[#f0f2f5] px-3 py-3 text-left transition",
-                  active
-                    ? "bg-[#f0f2f5]"
-                    : "bg-white hover:bg-[#f5f6f6] active:bg-[#e9edef]",
+                  "group flex w-full items-start gap-3 border-b px-3 py-3 text-left transition",
+                  needsHuman ? "border-red-100" : "border-[#f0f2f5]",
+                  active && needsHuman
+                    ? "bg-red-50"
+                    : active
+                      ? "bg-[#f0f2f5]"
+                      : needsHuman
+                        ? "bg-red-50/60 hover:bg-red-50 active:bg-red-100"
+                        : "bg-white hover:bg-[#f5f6f6] active:bg-[#e9edef]",
                 ].join(" ")}
               >
-                <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#dfe5e7] text-base font-bold text-[#54656f]">
+                <div className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#dfe5e7] text-base font-bold text-[#54656f] md:h-12 md:w-12">
                   {getInitial(contact)}
 
                   <span
                     className={[
                       "absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full border-2 border-white",
-                      contact.ai_enabled ? "bg-[#00a884]" : "bg-[#8696a0]",
+                      blocked
+                        ? "bg-red-500"
+                        : contact.ai_enabled
+                          ? "bg-[#00a884]"
+                          : "bg-[#8696a0]",
                     ].join(" ")}
-                    title={contact.ai_enabled ? "AI On" : "AI Off"}
+                    title={
+                      blocked
+                        ? "Blocked"
+                        : contact.ai_enabled
+                          ? "AI On"
+                          : "AI Off"
+                    }
                   />
                 </div>
 
@@ -280,7 +339,9 @@ export default function ChatList({
                       <p
                         className={[
                           "truncate text-sm text-[#111b21]",
-                          hasUnread ? "font-bold" : "font-semibold",
+                          hasUnread || needsHuman
+                            ? "font-black"
+                            : "font-semibold",
                         ].join(" ")}
                       >
                         {name}
@@ -297,9 +358,11 @@ export default function ChatList({
                       <span
                         className={[
                           "shrink-0 text-[11px]",
-                          hasUnread
-                            ? "font-bold text-[#00a884]"
-                            : "text-[#667781]",
+                          needsHuman
+                            ? "font-black text-red-600"
+                            : hasUnread
+                              ? "font-bold text-[#00a884]"
+                              : "text-[#667781]",
                         ].join(" ")}
                       >
                         {time}
@@ -311,9 +374,11 @@ export default function ChatList({
                     <p
                       className={[
                         "min-w-0 flex-1 truncate text-sm",
-                        hasUnread
-                          ? "font-semibold text-[#111b21]"
-                          : "text-[#667781]",
+                        needsHuman
+                          ? "font-semibold text-red-700"
+                          : hasUnread
+                            ? "font-semibold text-[#111b21]"
+                            : "text-[#667781]",
                       ].join(" ")}
                     >
                       {getLastMessagePreview(contact)}
@@ -328,16 +393,30 @@ export default function ChatList({
                     ) : null}
                   </div>
 
-                  <div className="mt-2 flex items-center gap-2">
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {needsHuman ? (
+                      <span className="inline-flex rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-red-700">
+                        Needs human attention
+                      </span>
+                    ) : null}
+
+                    {blocked ? (
+                      <span className="inline-flex rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-red-700">
+                        Blocked
+                      </span>
+                    ) : null}
+
                     <span
                       className={[
                         "inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold",
-                        contact.ai_enabled
+                        contact.ai_enabled && !blocked
                           ? "bg-[#e7fce3] text-[#008069]"
                           : "bg-[#f0f2f5] text-[#667781]",
                       ].join(" ")}
                     >
-                      {contact.ai_enabled ? "AI auto-reply on" : "AI off"}
+                      {contact.ai_enabled && !blocked
+                        ? "AI auto-reply on"
+                        : "AI off"}
                     </span>
                   </div>
                 </div>

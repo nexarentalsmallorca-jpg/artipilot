@@ -101,12 +101,16 @@ export default function MessageComposer({
   onSend,
   onAiSuggest,
   onSendMedia,
+  blocked = false,
+  needsHumanAttention = false,
 }: {
   disabled: boolean;
   quickReplies: QuickReply[];
   onSend: (body: string) => Promise<void>;
   onAiSuggest: () => Promise<string | null>;
   onSendMedia?: (file: File, caption: string) => Promise<void>;
+  blocked?: boolean;
+  needsHumanAttention?: boolean;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -119,9 +123,11 @@ export default function MessageComposer({
   const [error, setError] = useState<string | null>(null);
 
   const cleanText = text.trim();
+  const fullyDisabled = disabled || blocked;
 
-  const canSendText = !disabled && !sending && !attachment && cleanText.length > 0;
-  const canSendMedia = !disabled && !sending && Boolean(attachment);
+  const canSendText =
+    !fullyDisabled && !sending && !attachment && cleanText.length > 0;
+  const canSendMedia = !fullyDisabled && !sending && Boolean(attachment);
   const canSend = canSendText || canSendMedia;
 
   const acceptedFileTypes = useMemo(() => {
@@ -151,6 +157,15 @@ export default function MessageComposer({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disabled]);
+
+  useEffect(() => {
+    if (blocked) {
+      setShowQuickReplies(false);
+      setError(null);
+      clearAttachment();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blocked]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -220,6 +235,21 @@ export default function MessageComposer({
       return;
     }
 
+    if (blocked) {
+      setError("This customer is blocked. Unblock them before sending.");
+      return;
+    }
+
+    if (needsHumanAttention) {
+      const confirmed = window.confirm(
+        "This chat is marked as needing human attention. Send this message anyway?"
+      );
+
+      if (!confirmed) {
+        return;
+      }
+    }
+
     setSending(true);
     setError(null);
 
@@ -259,7 +289,7 @@ export default function MessageComposer({
   }
 
   async function handleSuggest() {
-    if (disabled || suggesting || attachment) {
+    if (fullyDisabled || suggesting || attachment) {
       return;
     }
 
@@ -281,9 +311,7 @@ export default function MessageComposer({
       }
     } catch (error) {
       console.error("AI suggestion failed:", error);
-      setError(
-        error instanceof Error ? error.message : "AI suggestion failed."
-      );
+      setError(error instanceof Error ? error.message : "AI suggestion failed.");
     } finally {
       setSuggesting(false);
     }
@@ -301,7 +329,7 @@ export default function MessageComposer({
   }
 
   function handleAttachmentClick() {
-    if (disabled || sending) {
+    if (fullyDisabled || sending) {
       return;
     }
 
@@ -317,8 +345,21 @@ export default function MessageComposer({
         accept={acceptedFileTypes}
         className="hidden"
         onChange={handleFileChange}
-        disabled={disabled || sending}
+        disabled={fullyDisabled || sending}
       />
+
+      {blocked ? (
+        <div className="mb-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
+          <span className="font-black">Blocked customer.</span> Unblock this
+          customer before sending manual messages.
+        </div>
+      ) : needsHumanAttention ? (
+        <div className="mb-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
+          <span className="font-black">Needs human attention.</span> This chat
+          should be handled manually. AI auto-reply should stay off until you
+          give the chat back to AI.
+        </div>
+      ) : null}
 
       {error ? (
         <div className="mb-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
@@ -423,7 +464,7 @@ export default function MessageComposer({
       <div className="flex items-end gap-2">
         <button
           type="button"
-          disabled={disabled || Boolean(attachment)}
+          disabled={fullyDisabled || Boolean(attachment)}
           title="Quick replies"
           onClick={() => setShowQuickReplies((value) => !value)}
           className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xl text-[#54656f] transition hover:bg-[#e9edef] disabled:cursor-not-allowed disabled:opacity-40 md:h-11 md:w-11"
@@ -433,7 +474,7 @@ export default function MessageComposer({
 
         <button
           type="button"
-          disabled={disabled || sending}
+          disabled={fullyDisabled || sending}
           title="Attach image, video or file"
           onClick={handleAttachmentClick}
           className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xl text-[#54656f] transition hover:bg-[#e9edef] disabled:cursor-not-allowed disabled:opacity-40 md:h-11 md:w-11"
@@ -452,15 +493,17 @@ export default function MessageComposer({
                 setError(null);
               }
             }}
-            disabled={disabled || sending}
+            disabled={fullyDisabled || sending}
             placeholder={
-              disabled
-                ? "Select a chat to reply"
-                : attachment
-                  ? "Add a caption"
-                  : suggesting
-                    ? "Generating AI suggestion..."
-                    : "Type a message"
+              blocked
+                ? "Customer is blocked"
+                : disabled
+                  ? "Select a chat to reply"
+                  : attachment
+                    ? "Add a caption"
+                    : suggesting
+                      ? "Generating AI suggestion..."
+                      : "Type a message"
             }
             rows={1}
             className="max-h-32 min-h-[28px] w-full resize-none bg-transparent py-1 text-sm leading-6 text-[#111b21] outline-none placeholder:text-[#667781] disabled:cursor-not-allowed"
@@ -475,7 +518,7 @@ export default function MessageComposer({
 
         <button
           type="button"
-          disabled={disabled || suggesting || Boolean(attachment)}
+          disabled={fullyDisabled || suggesting || Boolean(attachment)}
           onClick={() => void handleSuggest()}
           title="Generate AI reply suggestion"
           className="mb-0.5 hidden h-10 shrink-0 items-center justify-center rounded-full bg-[#e7fce3] px-4 text-xs font-black text-[#008069] transition hover:bg-[#d9fdd3] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 sm:flex md:h-11"
@@ -485,7 +528,7 @@ export default function MessageComposer({
 
         <button
           type="button"
-          disabled={disabled || suggesting || Boolean(attachment)}
+          disabled={fullyDisabled || suggesting || Boolean(attachment)}
           onClick={() => void handleSuggest()}
           title="Generate AI reply suggestion"
           className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#e7fce3] text-xs font-black text-[#008069] transition hover:bg-[#d9fdd3] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 sm:hidden md:h-11 md:w-11"

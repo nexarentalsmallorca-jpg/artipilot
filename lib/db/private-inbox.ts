@@ -11,6 +11,10 @@ export type ApiContact = {
   last_message: string | null;
   last_message_at: string | null;
   unread_count: number;
+  blocked: boolean;
+  needs_human_attention: boolean;
+  human_attention_reason: string | null;
+  human_attention_at: string | null;
 };
 
 export type ApiMessageType =
@@ -49,6 +53,10 @@ function cleanString(value: unknown) {
 function nullableString(value: unknown) {
   const clean = cleanString(value);
   return clean || null;
+}
+
+function booleanValue(value: unknown) {
+  return value === true;
 }
 
 function isSchemaError(error: unknown) {
@@ -162,9 +170,7 @@ function getMessageCreatedAt(row: Record<string, unknown>) {
 }
 
 function getMediaId(row: Record<string, unknown>) {
-  return (
-    (row.media_id as string) ?? (row.whatsapp_media_id as string) ?? null
-  );
+  return (row.media_id as string) ?? (row.whatsapp_media_id as string) ?? null;
 }
 
 function getMediaUrl(row: Record<string, unknown>) {
@@ -270,6 +276,10 @@ export function normalizeContactRow(row: Record<string, unknown>): ApiContact {
     last_message: (row.last_message as string) ?? null,
     last_message_at: (row.last_message_at as string) ?? null,
     unread_count: Number(row.unread_count || 0),
+    blocked: booleanValue(row.blocked),
+    needs_human_attention: booleanValue(row.needs_human_attention),
+    human_attention_reason: (row.human_attention_reason as string) ?? null,
+    human_attention_at: (row.human_attention_at as string) ?? null,
   };
 }
 
@@ -383,6 +393,7 @@ export async function listContacts(): Promise<ApiContact[]> {
   const primary = await db
     .from("artipilot_contacts")
     .select("*")
+    .order("needs_human_attention", { ascending: false })
     .order("last_message_at", { ascending: false, nullsFirst: false });
 
   if (!primary.error) {
@@ -404,6 +415,10 @@ export async function listContacts(): Promise<ApiContact[]> {
   return (fallback.data || [])
     .map((row) => normalizeContactRow(row as Record<string, unknown>))
     .sort((a, b) => {
+      if (a.needs_human_attention !== b.needs_human_attention) {
+        return a.needs_human_attention ? -1 : 1;
+      }
+
       const aTime = a.last_message_at
         ? new Date(a.last_message_at).getTime()
         : 0;
@@ -508,12 +523,20 @@ export async function updateContactAi(
   const db = getSupabaseAdmin();
   const now = new Date().toISOString();
 
+  const modernUpdates: Record<string, unknown> = {
+    ai_enabled: aiEnabled,
+    updated_at: now,
+  };
+
+  if (aiEnabled) {
+    modernUpdates.needs_human_attention = false;
+    modernUpdates.human_attention_reason = null;
+    modernUpdates.human_attention_at = null;
+  }
+
   const primary = await db
     .from("artipilot_contacts")
-    .update({
-      ai_enabled: aiEnabled,
-      updated_at: now,
-    })
+    .update(modernUpdates)
     .eq("id", contactId)
     .select("*")
     .single();
@@ -540,6 +563,203 @@ export async function updateContactAi(
   }
 
   return normalizeContactRow(fallback.data as Record<string, unknown>);
+}
+
+export async function blockContact(contactId: string): Promise<ApiContact> {
+  const db = getSupabaseAdmin();
+  const now = new Date().toISOString();
+
+  const primary = await db
+    .from("artipilot_contacts")
+    .update({
+      blocked: true,
+      ai_enabled: false,
+      needs_human_attention: false,
+      human_attention_reason: null,
+      human_attention_at: null,
+      updated_at: now,
+    })
+    .eq("id", contactId)
+    .select("*")
+    .single();
+
+  if (!primary.error && primary.data) {
+    return normalizeContactRow(primary.data as Record<string, unknown>);
+  }
+
+  if (!isSchemaError(primary.error)) {
+    throw primary.error;
+  }
+
+  const fallback = await db
+    .from("artipilot_contacts")
+    .update({
+      ai_enabled: false,
+    })
+    .eq("id", contactId)
+    .select("*")
+    .single();
+
+  if (fallback.error) {
+    throw fallback.error;
+  }
+
+  return normalizeContactRow(fallback.data as Record<string, unknown>);
+}
+
+export async function unblockContact(contactId: string): Promise<ApiContact> {
+  const db = getSupabaseAdmin();
+  const now = new Date().toISOString();
+
+  const primary = await db
+    .from("artipilot_contacts")
+    .update({
+      blocked: false,
+      updated_at: now,
+    })
+    .eq("id", contactId)
+    .select("*")
+    .single();
+
+  if (!primary.error && primary.data) {
+    return normalizeContactRow(primary.data as Record<string, unknown>);
+  }
+
+  if (!isSchemaError(primary.error)) {
+    throw primary.error;
+  }
+
+  return getContactById(contactId);
+}
+
+export async function markContactHumanAttention(
+  contactId: string,
+  reason?: string | null
+): Promise<ApiContact> {
+  const db = getSupabaseAdmin();
+  const now = new Date().toISOString();
+  const cleanReason =
+    nullableString(reason) ||
+    "Customer requested human/team support or needs manual review.";
+
+  const primary = await db
+    .from("artipilot_contacts")
+    .update({
+      needs_human_attention: true,
+      human_attention_reason: cleanReason,
+      human_attention_at: now,
+      ai_enabled: false,
+      updated_at: now,
+    })
+    .eq("id", contactId)
+    .select("*")
+    .single();
+
+  if (!primary.error && primary.data) {
+    return normalizeContactRow(primary.data as Record<string, unknown>);
+  }
+
+  if (!isSchemaError(primary.error)) {
+    throw primary.error;
+  }
+
+  const fallback = await db
+    .from("artipilot_contacts")
+    .update({
+      ai_enabled: false,
+    })
+    .eq("id", contactId)
+    .select("*")
+    .single();
+
+  if (fallback.error) {
+    throw fallback.error;
+  }
+
+  return normalizeContactRow(fallback.data as Record<string, unknown>);
+}
+
+export async function clearContactHumanAttention(
+  contactId: string
+): Promise<ApiContact> {
+  const db = getSupabaseAdmin();
+  const now = new Date().toISOString();
+
+  const primary = await db
+    .from("artipilot_contacts")
+    .update({
+      needs_human_attention: false,
+      human_attention_reason: null,
+      human_attention_at: null,
+      updated_at: now,
+    })
+    .eq("id", contactId)
+    .select("*")
+    .single();
+
+  if (!primary.error && primary.data) {
+    return normalizeContactRow(primary.data as Record<string, unknown>);
+  }
+
+  if (!isSchemaError(primary.error)) {
+    throw primary.error;
+  }
+
+  return getContactById(contactId);
+}
+
+export async function deleteMessage(messageId: string) {
+  const db = getSupabaseAdmin();
+  const cleanId = cleanString(messageId);
+
+  if (!cleanId) {
+    throw new Error("messageId is required.");
+  }
+
+  const { error } = await db.from("artipilot_messages").delete().eq("id", cleanId);
+
+  if (error) {
+    throw error;
+  }
+
+  return { ok: true };
+}
+
+export async function deleteChat(contactId: string) {
+  const db = getSupabaseAdmin();
+  const contact = await getContactById(contactId);
+  const phones = phoneLookupVariants(contact.phone);
+
+  for (const phone of phones) {
+    const byPhone = await db
+      .from("artipilot_messages")
+      .delete()
+      .eq("contact_phone", phone);
+
+    if (byPhone.error && !isSchemaError(byPhone.error)) {
+      throw byPhone.error;
+    }
+  }
+
+  const byContactId = await db
+    .from("artipilot_messages")
+    .delete()
+    .eq("contact_id", contactId);
+
+  if (byContactId.error && !isSchemaError(byContactId.error)) {
+    throw byContactId.error;
+  }
+
+  const deleteContact = await db
+    .from("artipilot_contacts")
+    .delete()
+    .eq("id", contactId);
+
+  if (deleteContact.error) {
+    throw deleteContact.error;
+  }
+
+  return { ok: true };
 }
 
 export async function insertOutboundMessage(params: {
