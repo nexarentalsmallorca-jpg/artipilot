@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requirePrivateSession } from "@/lib/auth/private-session";
+import { translateMessageToEnglish } from "@/lib/ai/generateReply";
 import {
   getContactById,
   insertOutboundMessage,
@@ -60,17 +61,9 @@ function detectMessageType(file: File): MessageType {
   const mimeType = (file.type || "").toLowerCase();
   const fileName = (file.name || "").toLowerCase();
 
-  if (mimeType.startsWith("image/")) {
-    return "image";
-  }
-
-  if (mimeType.startsWith("video/")) {
-    return "video";
-  }
-
-  if (mimeType.startsWith("audio/")) {
-    return "audio";
-  }
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
 
   if (
     fileName.endsWith(".jpg") ||
@@ -111,9 +104,7 @@ function getMediaPreviewText(params: {
   const caption = cleanString(params.caption);
   const fileName = cleanString(params.fileName);
 
-  if (caption) {
-    return caption;
-  }
+  if (caption) return caption;
 
   if (params.messageType === "image") {
     return fileName ? `📷 ${fileName}` : "📷 Image";
@@ -147,6 +138,20 @@ function getWhatsAppMediaId(result: SendResult) {
   );
 }
 
+async function translateForInbox(text: string) {
+  const cleanText = cleanString(text);
+
+  if (!cleanText) {
+    return {
+      englishTranslation: null,
+      detectedLanguage: null,
+      translationStatus: "skipped" as const,
+    };
+  }
+
+  return translateMessageToEnglish(cleanText);
+}
+
 async function sendMediaWithCurrentHelper(params: {
   phone: string;
   file: File;
@@ -166,24 +171,6 @@ async function sendMediaWithCurrentHelper(params: {
     } satisfies SendResult;
   }
 
-  /*
-    This supports both possible helper styles without breaking TypeScript:
-
-    1) sendWhatsAppMedia({
-         to,
-         phone,
-         file,
-         type,
-         mediaType,
-         caption,
-         filename
-       })
-
-    2) sendWhatsAppMedia(phone, file, type, caption, filename)
-
-    Your previous send helper was rewritten during this project, but this route
-    stays defensive so it does not break if the helper signature is slightly different.
-  */
   if (sender.sendWhatsAppMedia.length >= 5) {
     return sender.sendWhatsAppMedia(
       params.phone,
@@ -206,34 +193,11 @@ async function sendMediaWithCurrentHelper(params: {
   });
 }
 
-async function handleJsonTextSend(request: NextRequest) {
-  let body: {
-    contactId?: unknown;
-    message?: unknown;
-    text?: unknown;
-  };
-
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
-  }
-
-  const contactId = cleanString(body.contactId);
-  const messageText = cleanString(body.message || body.text);
-
-  if (!contactId) {
-    return NextResponse.json({ error: "contactId is required." }, { status: 400 });
-  }
-
-  if (!messageText) {
-    return NextResponse.json(
-      { error: "Message text is required." },
-      { status: 400 }
-    );
-  }
-
-  const contact = await getContactById(contactId);
+async function sendManualTextMessage(params: {
+  contactId: string;
+  messageText: string;
+}) {
+  const contact = await getContactById(params.contactId);
 
   if (!contact?.id) {
     return NextResponse.json({ error: "Contact was not found." }, { status: 404 });
@@ -248,19 +212,27 @@ async function handleJsonTextSend(request: NextRequest) {
     );
   }
 
+  const translation = await translateForInbox(params.messageText);
+
   const pendingMessage = await insertOutboundMessage({
     contactId: contact.id,
     phone,
-    body: messageText,
+    body: params.messageText,
     senderType: "admin",
     status: "pending",
     whatsappMessageId: null,
     messageType: "text",
     mediaId: null,
     mediaUrl: null,
+    englishTranslation: translation.englishTranslation,
+    detectedLanguage: translation.detectedLanguage,
+    translationStatus: translation.translationStatus,
   });
 
-  const sendResult = await WhatsAppSender.sendWhatsAppText(phone, messageText);
+  const sendResult = await WhatsAppSender.sendWhatsAppText(
+    phone,
+    params.messageText
+  );
 
   if (!sendResult.ok) {
     await updateOutboundMessage(pendingMessage.id, {
@@ -294,13 +266,43 @@ async function handleJsonTextSend(request: NextRequest) {
     media_url: null,
   });
 
-  await touchContactLastMessage(contact.id, messageText);
+  await touchContactLastMessage(contact.id, params.messageText);
 
   return NextResponse.json({
     ok: true,
     message: savedMessage,
     whatsappMessageId,
   });
+}
+
+async function handleJsonTextSend(request: NextRequest) {
+  let body: {
+    contactId?: unknown;
+    message?: unknown;
+    text?: unknown;
+  };
+
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+  }
+
+  const contactId = cleanString(body.contactId);
+  const messageText = cleanString(body.message || body.text);
+
+  if (!contactId) {
+    return NextResponse.json({ error: "contactId is required." }, { status: 400 });
+  }
+
+  if (!messageText) {
+    return NextResponse.json(
+      { error: "Message text is required." },
+      { status: 400 }
+    );
+  }
+
+  return sendManualTextMessage({ contactId, messageText });
 }
 
 async function handleFormDataSend(request: NextRequest) {
@@ -329,80 +331,8 @@ async function handleFormDataSend(request: NextRequest) {
     );
   }
 
-  /*
-    If composer sends FormData but without a file, we still send it as a normal
-    text message. This keeps manual text sending safe.
-  */
   if (!file) {
-    const contact = await getContactById(contactId);
-
-    if (!contact?.id) {
-      return NextResponse.json(
-        { error: "Contact was not found." },
-        { status: 404 }
-      );
-    }
-
-    const phone = cleanString(contact.phone).replace(/\D/g, "");
-
-    if (!phone) {
-      return NextResponse.json(
-        { error: "Contact phone number is missing." },
-        { status: 400 }
-      );
-    }
-
-    const pendingMessage = await insertOutboundMessage({
-      contactId: contact.id,
-      phone,
-      body: messageText,
-      senderType: "admin",
-      status: "pending",
-      whatsappMessageId: null,
-      messageType: "text",
-      mediaId: null,
-      mediaUrl: null,
-    });
-
-    const sendResult = await WhatsAppSender.sendWhatsAppText(phone, messageText);
-
-    if (!sendResult.ok) {
-      await updateOutboundMessage(pendingMessage.id, {
-        status: "failed",
-        status_error: sendResult.error || "WhatsApp send failed.",
-        whatsapp_message_id: null,
-        delivery_status: "failed",
-        delivery_error: sendResult.error || "WhatsApp send failed.",
-      });
-
-      return NextResponse.json(
-        {
-          error:
-            sendResult.error ||
-            "WhatsApp failed to send this message. Check Meta settings.",
-        },
-        { status: 502 }
-      );
-    }
-
-    const savedMessage = await updateOutboundMessage(pendingMessage.id, {
-      status: "sent",
-      status_error: null,
-      whatsapp_message_id: sendResult.messageId || null,
-      delivery_status: "sent",
-      delivery_error: null,
-      message_type: "text",
-      media_id: null,
-      media_url: null,
-    });
-
-    await touchContactLastMessage(contact.id, messageText);
-
-    return NextResponse.json({
-      ok: true,
-      message: savedMessage,
-      whatsappMessageId: sendResult.messageId || null,
-    });
+    return sendManualTextMessage({ contactId, messageText });
   }
 
   if (file.size <= 0) {
@@ -435,6 +365,8 @@ async function handleFormDataSend(request: NextRequest) {
     fileName,
   });
 
+  const translation = await translateForInbox(previewText);
+
   const pendingMessage = await insertOutboundMessage({
     contactId: contact.id,
     phone,
@@ -445,6 +377,9 @@ async function handleFormDataSend(request: NextRequest) {
     messageType,
     mediaId: null,
     mediaUrl: null,
+    englishTranslation: translation.englishTranslation,
+    detectedLanguage: translation.detectedLanguage,
+    translationStatus: translation.translationStatus,
   });
 
   const sendResult = await sendMediaWithCurrentHelper({

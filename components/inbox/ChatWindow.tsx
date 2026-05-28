@@ -13,7 +13,14 @@ export type Message = {
   message_type?: string | null;
   media_id?: string | null;
   media_url?: string | null;
+  english_translation?: string | null;
+  detected_language?: string | null;
+  translation_status?: string | null;
 };
+
+function cleanString(value: unknown) {
+  return String(value || "").trim();
+}
 
 function displayName(contact: Contact) {
   return contact.name || contact.profile_name || contact.phone || "Unknown";
@@ -157,6 +164,35 @@ function getFileNameFromUrl(url: string) {
   }
 }
 
+function shouldShowEnglishTranslation(message: Message) {
+  const translation = cleanString(message.english_translation);
+  const body = cleanString(message.body);
+
+  if (!translation) {
+    return false;
+  }
+
+  if (!body) {
+    return true;
+  }
+
+  return translation.toLowerCase() !== body.toLowerCase();
+}
+
+function getTranslationLabel(message: Message) {
+  const language = cleanString(message.detected_language);
+
+  if (!language || language.toLowerCase() === "unknown") {
+    return "English translation";
+  }
+
+  if (language.toLowerCase() === "en" || language.toLowerCase() === "english") {
+    return "English";
+  }
+
+  return `English translation · ${language.toUpperCase()}`;
+}
+
 function linkifyText(text: string) {
   const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
   const parts = text.split(urlRegex);
@@ -182,6 +218,26 @@ function linkifyText(text: string) {
       </a>
     );
   });
+}
+
+function TranslationBlock({ message }: { message: Message }) {
+  if (!shouldShowEnglishTranslation(message)) {
+    return null;
+  }
+
+  const translation = cleanString(message.english_translation);
+
+  return (
+    <div className="mt-2 rounded-xl border border-black/5 bg-black/[0.035] px-3 py-2">
+      <p className="mb-1 text-[10px] font-black uppercase tracking-wide text-[#667781]">
+        {getTranslationLabel(message)}
+      </p>
+
+      <p className="whitespace-pre-wrap break-words text-xs leading-5 text-[#3b4a54]">
+        {linkifyText(translation)}
+      </p>
+    </div>
+  );
 }
 
 function MediaContent({ message }: { message: Message }) {
@@ -585,6 +641,8 @@ export default function ChatWindow({
                             {" "}
                           </p>
                         ) : null}
+
+                        <TranslationBlock message={message} />
 
                         <div
                           className={[

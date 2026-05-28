@@ -37,10 +37,18 @@ export type ApiMessage = {
   message_type: ApiMessageType;
   media_id: string | null;
   media_url: string | null;
+  english_translation: string | null;
+  detected_language: string | null;
+  translation_status: string | null;
 };
 
 function cleanString(value: unknown) {
   return String(value || "").trim();
+}
+
+function nullableString(value: unknown) {
+  const clean = cleanString(value);
+  return clean || null;
 }
 
 function isSchemaError(error: unknown) {
@@ -155,9 +163,7 @@ function getMessageCreatedAt(row: Record<string, unknown>) {
 
 function getMediaId(row: Record<string, unknown>) {
   return (
-    (row.media_id as string) ??
-    (row.whatsapp_media_id as string) ??
-    null
+    (row.media_id as string) ?? (row.whatsapp_media_id as string) ?? null
   );
 }
 
@@ -166,6 +172,31 @@ function getMediaUrl(row: Record<string, unknown>) {
     (row.media_url as string) ??
     (row.file_url as string) ??
     (row.attachment_url as string) ??
+    null
+  );
+}
+
+function getEnglishTranslation(row: Record<string, unknown>) {
+  return (
+    (row.english_translation as string) ??
+    (row.translation_en as string) ??
+    null
+  );
+}
+
+function getDetectedLanguage(row: Record<string, unknown>) {
+  return (
+    (row.detected_language as string) ??
+    (row.language as string) ??
+    (row.source_language as string) ??
+    null
+  );
+}
+
+function getTranslationStatus(row: Record<string, unknown>) {
+  return (
+    (row.translation_status as string) ??
+    (row.translation_state as string) ??
     null
   );
 }
@@ -258,6 +289,9 @@ export function normalizeMessageRow(row: Record<string, unknown>): ApiMessage {
     message_type: messageType,
     media_id: getMediaId(row),
     media_url: getMediaUrl(row),
+    english_translation: getEnglishTranslation(row),
+    detected_language: getDetectedLanguage(row),
+    translation_status: getTranslationStatus(row),
   };
 }
 
@@ -521,6 +555,9 @@ export async function insertOutboundMessage(params: {
   mediaId?: string | null;
   mediaUrl?: string | null;
   raw?: unknown;
+  englishTranslation?: string | null;
+  detectedLanguage?: string | null;
+  translationStatus?: string | null;
 }) {
   const db = getSupabaseAdmin();
   const phone = normalizePhone(params.phone);
@@ -542,6 +579,9 @@ export async function insertOutboundMessage(params: {
     content: params.body,
     media_id: params.mediaId ?? null,
     media_url: params.mediaUrl ?? null,
+    english_translation: params.englishTranslation ?? null,
+    detected_language: params.detectedLanguage ?? null,
+    translation_status: params.translationStatus ?? null,
     delivery_status: status,
     status_error: errorText,
     delivery_error: errorText,
@@ -559,6 +599,9 @@ export async function insertOutboundMessage(params: {
     content: params.body,
     media_id: params.mediaId ?? null,
     media_url: params.mediaUrl ?? null,
+    english_translation: params.englishTranslation ?? null,
+    detected_language: params.detectedLanguage ?? null,
+    translation_status: params.translationStatus ?? null,
     delivery_status: status,
     created_at: now,
   };
@@ -636,6 +679,30 @@ export async function updateOutboundMessage(
     fullUpdates.raw_payload = updates.raw_payload;
   }
 
+  if ("english_translation" in updates) {
+    fullUpdates.english_translation = updates.english_translation;
+  }
+
+  if ("englishTranslation" in updates) {
+    fullUpdates.english_translation = updates.englishTranslation;
+  }
+
+  if ("detected_language" in updates) {
+    fullUpdates.detected_language = updates.detected_language;
+  }
+
+  if ("detectedLanguage" in updates) {
+    fullUpdates.detected_language = updates.detectedLanguage;
+  }
+
+  if ("translation_status" in updates) {
+    fullUpdates.translation_status = updates.translation_status;
+  }
+
+  if ("translationStatus" in updates) {
+    fullUpdates.translation_status = updates.translationStatus;
+  }
+
   const primary = await db
     .from("artipilot_messages")
     .update(fullUpdates)
@@ -679,6 +746,18 @@ export async function updateOutboundMessage(
 
   if ("media_url" in fullUpdates) {
     simpleUpdates.media_url = fullUpdates.media_url;
+  }
+
+  if ("english_translation" in fullUpdates) {
+    simpleUpdates.english_translation = fullUpdates.english_translation;
+  }
+
+  if ("detected_language" in fullUpdates) {
+    simpleUpdates.detected_language = fullUpdates.detected_language;
+  }
+
+  if ("translation_status" in fullUpdates) {
+    simpleUpdates.translation_status = fullUpdates.translation_status;
   }
 
   const secondary = await db
@@ -730,6 +809,9 @@ export async function insertInboundMessage(params: {
   messageType?: ApiMessageType;
   mediaId?: string | null;
   mediaUrl?: string | null;
+  englishTranslation?: string | null;
+  detectedLanguage?: string | null;
+  translationStatus?: string | null;
 }) {
   const db = getSupabaseAdmin();
   const phone = normalizePhone(params.phone);
@@ -747,6 +829,9 @@ export async function insertInboundMessage(params: {
     content: params.body,
     media_id: params.mediaId ?? null,
     media_url: params.mediaUrl ?? null,
+    english_translation: params.englishTranslation ?? null,
+    detected_language: params.detectedLanguage ?? null,
+    translation_status: params.translationStatus ?? null,
     delivery_status: "received",
     raw_payload: params.raw ?? null,
     created_at: createdAt,
@@ -762,6 +847,9 @@ export async function insertInboundMessage(params: {
     content: params.body,
     media_id: params.mediaId ?? null,
     media_url: params.mediaUrl ?? null,
+    english_translation: params.englishTranslation ?? null,
+    detected_language: params.detectedLanguage ?? null,
+    translation_status: params.translationStatus ?? null,
     delivery_status: "received",
     created_at: createdAt,
   };
@@ -812,6 +900,59 @@ export async function insertInboundMessage(params: {
   );
 
   return message;
+}
+
+export async function updateMessageTranslation(
+  messageId: string,
+  params: {
+    englishTranslation?: string | null;
+    detectedLanguage?: string | null;
+    translationStatus?: string | null;
+  }
+) {
+  const db = getSupabaseAdmin();
+  const now = new Date().toISOString();
+
+  const fullUpdates = {
+    english_translation: nullableString(params.englishTranslation),
+    detected_language: nullableString(params.detectedLanguage),
+    translation_status: nullableString(params.translationStatus) || "done",
+    updated_at: now,
+  };
+
+  const primary = await db
+    .from("artipilot_messages")
+    .update(fullUpdates)
+    .eq("id", messageId)
+    .select("*")
+    .single();
+
+  if (!primary.error && primary.data) {
+    return normalizeMessageRow(primary.data as Record<string, unknown>);
+  }
+
+  if (!isSchemaError(primary.error)) {
+    throw primary.error;
+  }
+
+  const fallbackUpdates = {
+    english_translation: fullUpdates.english_translation,
+    detected_language: fullUpdates.detected_language,
+    translation_status: fullUpdates.translation_status,
+  };
+
+  const fallback = await db
+    .from("artipilot_messages")
+    .update(fallbackUpdates)
+    .eq("id", messageId)
+    .select("*")
+    .single();
+
+  if (fallback.error) {
+    throw fallback.error;
+  }
+
+  return normalizeMessageRow(fallback.data as Record<string, unknown>);
 }
 
 export async function touchContactLastMessage(contactId: string, text: string) {

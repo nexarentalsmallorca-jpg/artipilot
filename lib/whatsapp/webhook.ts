@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateAiReply, isOpenAiConfigured } from "@/lib/ai/generateReply";
+import {
+  generateAiReply,
+  isOpenAiConfigured,
+  translateMessageToEnglish,
+} from "@/lib/ai/generateReply";
 import {
   insertInboundMessage as saveInboundMessage,
   insertOutboundMessage,
@@ -383,6 +387,20 @@ function getInboxNotificationUrl(contactId: string) {
   }
 
   return `/dashboard/inbox?contact=${encodeURIComponent(cleanContactId)}`;
+}
+
+async function translateForInbox(text: string) {
+  const cleanText = safeString(text);
+
+  if (!cleanText) {
+    return {
+      englishTranslation: null,
+      detectedLanguage: null,
+      translationStatus: "skipped" as const,
+    };
+  }
+
+  return translateMessageToEnglish(cleanText);
 }
 
 async function notifyNewInboundMessage(params: {
@@ -770,6 +788,8 @@ async function maybeAutoReply(params: {
     return;
   }
 
+  const aiTranslation = await translateForInbox(replyText);
+
   let pendingMessage: { id: string } | null = null;
 
   try {
@@ -784,6 +804,9 @@ async function maybeAutoReply(params: {
       messageType: "text",
       mediaId: null,
       mediaUrl: null,
+      englishTranslation: aiTranslation.englishTranslation,
+      detectedLanguage: aiTranslation.detectedLanguage,
+      translationStatus: aiTranslation.translationStatus,
     });
   } catch (error) {
     logError("Could not save pending Nero reply", error);
@@ -940,6 +963,7 @@ export async function POST(request: NextRequest) {
         }
 
         const contact = await upsertContact(phone, profileName);
+        const inboundTranslation = await translateForInbox(text);
 
         await saveInboundMessage({
           contactId: contact.id,
@@ -951,6 +975,9 @@ export async function POST(request: NextRequest) {
           messageType,
           mediaId,
           mediaUrl,
+          englishTranslation: inboundTranslation.englishTranslation,
+          detectedLanguage: inboundTranslation.detectedLanguage,
+          translationStatus: inboundTranslation.translationStatus,
         });
 
         await touchContactLastMessage(contact.id, text);

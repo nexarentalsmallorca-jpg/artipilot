@@ -16,6 +16,12 @@ type GenerateAiReplyParams = {
   humanHandback?: boolean;
 };
 
+export type EnglishTranslationResult = {
+  englishTranslation: string | null;
+  detectedLanguage: string | null;
+  translationStatus: "done" | "skipped" | "failed";
+};
+
 type OpenAIChatCompletionResponse = {
   choices?: {
     message?: {
@@ -33,6 +39,20 @@ function cleanText(value: unknown) {
 
 function getModel() {
   return process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
+}
+
+function safeJsonParse(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value);
+
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function buildPrivateWhatsAppRules(params: GenerateAiReplyParams) {
@@ -286,4 +306,150 @@ export async function generateAiReply(params: GenerateAiReplyParams) {
   }
 
   return validateReply(data.choices?.[0]?.message?.content || "", params);
+}
+
+export async function translateMessageToEnglish(
+  text: string
+): Promise<EnglishTranslationResult> {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const cleanInput = cleanText(text);
+
+  if (!cleanInput) {
+    return {
+      englishTranslation: null,
+      detectedLanguage: null,
+      translationStatus: "skipped",
+    };
+  }
+
+  if (!apiKey) {
+    return {
+      englishTranslation: null,
+      detectedLanguage: null,
+      translationStatus: "failed",
+    };
+  }
+
+  try {
+    const model = getModel();
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: "system",
+            content: `
+You are a precise translation engine for a private WhatsApp inbox.
+
+Task:
+- Detect the language of the message.
+- Translate the message into natural English.
+- Preserve meaning, dates, prices, names, phone numbers, URLs, emojis, and business details exactly.
+- Do not add extra explanation.
+- Do not answer the message.
+- Do not summarize.
+- Return only valid JSON.
+
+JSON format:
+{
+  "detectedLanguage": "two-letter language code like en, es, fr, de, it, pt, sv, unknown",
+  "englishTranslation": "English translation here",
+  "shouldDisplay": true
+}
+
+Rules:
+- If the original message is already English, set shouldDisplay to false and englishTranslation to the original text.
+- If the message is mixed language, translate the non-English parts and set shouldDisplay to true.
+- If the message is only a URL, number, emoji, name, or cannot be translated, set shouldDisplay to false.
+`.trim(),
+          },
+          {
+            role: "user",
+            content: cleanInput,
+          },
+        ],
+        temperature: 0,
+        max_completion_tokens: 220,
+        presence_penalty: 0,
+        frequency_penalty: 0,
+      }),
+    });
+
+    const rawText = await response.text();
+
+    let data: OpenAIChatCompletionResponse = {};
+
+    try {
+      data = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      data = {};
+    }
+
+    if (!response.ok) {
+      console.error("[ARTIPILOT_TRANSLATION_OPENAI_FAILED]", {
+        error: data.error?.message || rawText || "OpenAI translation failed.",
+      });
+
+      return {
+        englishTranslation: null,
+        detectedLanguage: null,
+        translationStatus: "failed",
+      };
+    }
+
+    const content = cleanText(data.choices?.[0]?.message?.content);
+    const parsed = safeJsonParse(content);
+
+    if (!parsed) {
+      console.error("[ARTIPILOT_TRANSLATION_JSON_PARSE_FAILED]", {
+        content,
+      });
+
+      return {
+        englishTranslation: null,
+        detectedLanguage: null,
+        translationStatus: "failed",
+      };
+    }
+
+    const detectedLanguage = cleanText(parsed.detectedLanguage) || "unknown";
+    const englishTranslation = cleanText(parsed.englishTranslation);
+    const shouldDisplay = parsed.shouldDisplay === true;
+
+    if (!shouldDisplay || !englishTranslation) {
+      return {
+        englishTranslation: null,
+        detectedLanguage,
+        translationStatus: "skipped",
+      };
+    }
+
+    if (englishTranslation.toLowerCase() === cleanInput.toLowerCase()) {
+      return {
+        englishTranslation: null,
+        detectedLanguage,
+        translationStatus: "skipped",
+      };
+    }
+
+    return {
+      englishTranslation,
+      detectedLanguage,
+      translationStatus: "done",
+    };
+  } catch (error) {
+    console.error("[ARTIPILOT_TRANSLATION_FAILED]", error);
+
+    return {
+      englishTranslation: null,
+      detectedLanguage: null,
+      translationStatus: "failed",
+    };
+  }
 }
