@@ -564,14 +564,15 @@ async function maybeRunBookingOrchestrator(
   const customerMessage = cleanText(params.customerMessage);
 
   const incomingMessage: NeroIncomingMessage = {
-    contactId: cleanText(params.contactId),
-    phone: cleanText(params.phone) || null,
-    customerName: cleanText(params.customerName) || null,
-    text: customerMessage || (params.hasMedia ? "[media received]" : ""),
-    language: cleanText(params.detectedLanguage) || null,
-    hasMedia: Boolean(params.hasMedia),
-    mediaType: params.mediaType || null,
-  };
+  contactId: cleanText(params.contactId),
+  phone: cleanText(params.phone) || null,
+  customerName: cleanText(params.customerName) || null,
+  text: customerMessage || (params.hasMedia ? "[media received]" : ""),
+  language: cleanText(params.detectedLanguage) || null,
+  hasMedia: Boolean(params.hasMedia),
+  mediaType: params.mediaType || null,
+  isFirstCustomerChat: Boolean(params.isFirstCustomerChat),
+};
 
   const result = await runNeroBookingOrchestrator(incomingMessage);
 
