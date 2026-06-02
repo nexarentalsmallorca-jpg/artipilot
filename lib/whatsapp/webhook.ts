@@ -120,6 +120,8 @@ type InboundMessageType =
   | "button"
   | "unknown";
 
+type AiMediaType = "image" | "document" | "video" | "audio" | "unknown" | null;
+
 type MediaForAi = {
   type: InboundMessageType;
   mediaId: string;
@@ -195,6 +197,26 @@ function normalizeInboundMessageType(value: unknown): InboundMessageType {
   }
 
   return type ? "unknown" : "text";
+}
+
+function getAiMediaType(messageType: InboundMessageType): AiMediaType {
+  if (messageType === "image") return "image";
+  if (messageType === "document") return "document";
+  if (messageType === "video") return "video";
+  if (messageType === "audio") return "audio";
+
+  if (
+    messageType === "sticker" ||
+    messageType === "location" ||
+    messageType === "contacts" ||
+    messageType === "interactive" ||
+    messageType === "button" ||
+    messageType === "unknown"
+  ) {
+    return "unknown";
+  }
+
+  return null;
 }
 
 function getMediaFromMessage(message: WaMessage): MediaForAi {
@@ -330,7 +352,7 @@ function getErrorMessage(error: unknown, fallback = "Unknown error") {
       return json;
     }
   } catch {
-    // Ignore.
+    // Ignore stringify errors.
   }
 
   return fallback;
@@ -486,7 +508,7 @@ async function upsertContact(phone: string, profileName?: string | null) {
     .from("artipilot_contacts")
     .select("id, phone, name, profile_name, ai_enabled, unread_count")
     .eq("phone", normalizedPhone)
-    .maybeSingle<ArtipilotContact>();
+    .maybeSingle();
 
   if (existingError) {
     logError("Contact lookup failed", existingError);
@@ -511,14 +533,14 @@ async function upsertContact(phone: string, profileName?: string | null) {
       .update(updates)
       .eq("id", existing.id)
       .select("id, phone, name, profile_name, ai_enabled, unread_count")
-      .single<ArtipilotContact>();
+      .single();
 
     if (updateError) {
       logError("Contact update failed", updateError);
       throw updateError;
     }
 
-    return updated || existing;
+    return (updated || existing) as ArtipilotContact;
   }
 
   const { data: created, error: createError } = await db
@@ -535,14 +557,14 @@ async function upsertContact(phone: string, profileName?: string | null) {
       updated_at: now,
     })
     .select("id, phone, name, profile_name, ai_enabled, unread_count")
-    .single<ArtipilotContact>();
+    .single();
 
   if (createError) {
     logError("Contact create failed", createError);
     throw createError;
   }
 
-  return created;
+  return created as ArtipilotContact;
 }
 
 async function updateContactAfterOutbound(params: {
@@ -672,11 +694,10 @@ async function listRecentMessagesForPhone(phone: string) {
     )
     .eq("contact_phone", normalizedPhone)
     .order("created_at", { ascending: false })
-    .limit(30)
-    .returns<ArtipilotMessage[]>();
+    .limit(30);
 
   if (!error) {
-    return [...(data || [])].reverse();
+    return ([...(data || [])].reverse() as ArtipilotMessage[]);
   }
 
   if (!isSchemaError(error)) {
@@ -691,15 +712,14 @@ async function listRecentMessagesForPhone(phone: string) {
     )
     .eq("contact_phone", normalizedPhone)
     .order("created_at", { ascending: false })
-    .limit(30)
-    .returns<ArtipilotMessage[]>();
+    .limit(30);
 
   if (fallback.error) {
     logError("Fallback recent messages lookup failed", fallback.error);
     return [];
   }
 
-  return [...(fallback.data || [])].reverse();
+  return ([...(fallback.data || [])].reverse() as ArtipilotMessage[]);
 }
 
 function buildHistoryForAi(messages: ArtipilotMessage[]) {
@@ -837,7 +857,7 @@ function buildAiInputFromInboundMessage(params: {
   }
 
   if (type === "audio") {
-    return "Customer sent an audio/voice message. Politely say you received it, but ask them to type the main details so you can help accurately with booking, licence, price, or rental support.";
+    return "Customer sent an audio/voice message. Politly say you received it, but ask them to type the main details so you can help accurately with booking, licence, price, or rental support.";
   }
 
   if (type === "sticker") {
@@ -864,7 +884,7 @@ async function maybeAutoReply(params: {
   inboundBody: string;
   messageType: InboundMessageType;
   media: MediaForAi;
-  rawMessage: WaMessage;
+  detectedLanguage?: string | null;
 }) {
   const phone = normalizePhone(params.phone);
   const inboundBody = safeString(params.inboundBody);
@@ -877,6 +897,7 @@ async function maybeAutoReply(params: {
     inboundBody,
     messageType,
     mediaId: params.media?.mediaId || null,
+    detectedLanguage: params.detectedLanguage || null,
     config: getAiDebugStatus(),
   });
 
@@ -917,12 +938,15 @@ async function maybeAutoReply(params: {
 
   const recentMessages = await listRecentMessagesForPhone(phone);
   const history = buildHistoryForAi(recentMessages);
-  const isFirstCustomerChat =
-    recentMessages.filter((message) => message.direction === "inbound")
-      .length <= 1;
+  const inboundCount = recentMessages.filter(
+    (message) => message.direction === "inbound"
+  ).length;
+
+  const isFirstCustomerChat = inboundCount <= 1;
 
   logDebug("Generating Nero reply", {
     phone,
+    contactId: params.contact.id,
     recentMessagesCount: recentMessages.length,
     historyCount: history.length,
     isFirstCustomerChat,
@@ -936,6 +960,12 @@ async function maybeAutoReply(params: {
       customerMessage: inboundBody,
       recentMessages: history,
       isFirstCustomerChat,
+      contactId: params.contact.id,
+      phone,
+      customerName: getContactDisplayName(params.contact, phone),
+      detectedLanguage: params.detectedLanguage || null,
+      hasMedia: messageType !== "text",
+      mediaType: getAiMediaType(messageType),
     });
   } catch (error) {
     logError("Nero AI generation failed", error);
@@ -1162,7 +1192,7 @@ export async function POST(request: NextRequest) {
           inboundBody: aiInput,
           messageType,
           media,
-          rawMessage: message,
+          detectedLanguage: inboundTranslation.detectedLanguage,
         });
       } catch (error) {
         logError("Webhook message handling failed", error);

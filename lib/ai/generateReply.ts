@@ -1,9 +1,8 @@
 import { buildNexaSystemPrompt } from "@/lib/ai/nexaBrain";
-
-export function isOpenAiConfigured() {
-  return Boolean(process.env.OPENAI_API_KEY?.trim());
-}
-
+import {
+  runNeroBookingOrchestrator,
+  type NeroIncomingMessage,
+} from "@/lib/booking/neroBookingOrchestrator";
 type ChatTurn = {
   role: "user" | "assistant";
   content: string;
@@ -14,6 +13,18 @@ type GenerateAiReplyParams = {
   recentMessages?: ChatTurn[];
   isFirstCustomerChat?: boolean;
   humanHandback?: boolean;
+
+  /*
+   * These fields are optional for backwards compatibility.
+   * Old code can still call generateAiReply exactly like before.
+   * When webhook passes these fields later, Nero booking session memory starts working.
+   */
+  contactId?: string | null;
+  phone?: string | null;
+  customerName?: string | null;
+  detectedLanguage?: string | null;
+  hasMedia?: boolean;
+  mediaType?: "image" | "document" | "video" | "audio" | "unknown" | null;
 };
 
 export type EnglishTranslationResult = {
@@ -40,7 +51,9 @@ function cleanText(value: unknown) {
 function getModel() {
   return process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
 }
-
+export function isOpenAiConfigured() {
+  return Boolean(process.env.OPENAI_API_KEY?.trim());
+}
 function extractJsonObject(value: string): Record<string, unknown> | null {
   const clean = cleanText(value);
 
@@ -223,7 +236,7 @@ ABSOLUTE BUSINESS RULES
 - Do not invent booking confirmations.
 - Do not say payment is complete unless the customer clearly says they paid or the system clearly confirms it.
 - Do not promise availability unless it was clearly provided in the conversation.
-- If real-time availability is needed, tell the customer to check/book online.
+- If real-time availability is needed, tell the customer it needs to be checked before confirming.
 - Never write anything that legally binds NEXA Rentals beyond the known terms.
 
 ==================================================
@@ -232,14 +245,16 @@ SCOOTER LICENCE RULE
 
 For 125cc scooter rental enquiries:
 - Confirm licence eligibility before pushing booking.
-- Customer needs a valid full A1 licence OR a valid full B car licence held for at least 3 years.
+- Customer needs a valid full A1/A2/A licence OR a valid full B car licence held for at least 3 years.
 - ID or passport is required.
 - Provisional, learner, expired, or unclear licences are not accepted in Spain.
 - UK provisional rules do not apply in Spain.
+- EU licences are accepted if valid and full.
+- Non-EU licences may require original licence plus International Driving Permit and team review.
 
 If customer wants a scooter and licence is not yet confirmed:
 Ask:
-"Do you have a valid A1 licence or a B car licence held for at least 3 years?"
+"Do you have a valid A1/A2/A licence, or a B car licence held for at least 3 years?"
 
 If customer has B licence:
 - Ask how long they have held it if not already clear.
@@ -300,33 +315,18 @@ BOOKING-FOCUSED RULE
 ==================================================
 
 Main goal:
-- Move eligible customers toward online booking.
-- Online booking is the priority.
+- Move eligible customers toward booking.
 - Do not be pushy, but make booking easy and clear.
+- For WhatsApp booking flow, collect details step by step.
+- Do not claim payment link is ready unless the system gives it.
+- Do not claim booking is confirmed unless payment/system confirmation exists.
 
-Before sending the booking link for scooter rental:
-- Confirm licence eligibility first, unless the customer is only asking general information.
-
-After licence is confirmed:
-- Send the correct booking link in the customer’s language.
-- Give clear booking instructions.
+Before creating/sending booking payment:
+- Confirm licence eligibility first for scooters.
+- Collect plan, pickup date/time, return date/time, full name, email, phone when needed.
 - Explain 50% online payment and 50% at pickup.
 - Remind them to bring driving licence, ID/passport, and €150 deposit.
 - Mention deposit can be card or cash.
-
-Good short booking instruction:
-"Perfect 👍 You can book here: [correct language link]
-
-Select your scooter, choose Half Day or Full Day, pick your date and time, fill in your details, and pay 50% online to reserve it. The remaining 50% is paid at pickup. Please bring your driving licence, ID/passport and €150 deposit by card or cash."
-
-Good detailed booking instruction when customer asks how to book:
-"Open the link, select your scooter, choose Half Day or Full Day, then select your pickup date and time.
-
-If you want 2, 3, 4, 5 or 6 days, choose the Full Day plan and select your pickup and return date/time. Multi-day rentals get a discounted daily price.
-
-Then fill in your name, email, phone number and basic details. Please make sure your email and phone number are correct because the confirmation will be sent there.
-
-You pay 50% online to reserve it, and the remaining 50% at pickup. For pickup, please bring your driving licence, ID/passport, and the €150 deposit by card or cash."
 
 ==================================================
 HUMAN HANDOFF / PRIVATE NUMBER RULE
@@ -403,7 +403,7 @@ BUSINESS GOAL
 - Help customers rent scooters/e-bikes from NEXA Rentals.
 - Give accurate prices and rules.
 - Confirm scooter licence eligibility.
-- Push online booking once eligible.
+- Collect booking details step by step.
 - Protect privacy.
 - Avoid unnecessary human handoff.
 - Never invent information.
@@ -490,12 +490,8 @@ function removeRepeatedIntro(reply: string) {
   return cleanAiReply(cleanReply);
 }
 
-function validateReply(reply: string, params: GenerateAiReplyParams) {
-  let cleanReply = cleanAiReply(reply);
-
-  if (!cleanReply) {
-    throw new Error("OpenAI returned an empty reply.");
-  }
+function checkForbiddenPrivateWording(reply: string) {
+  const cleanReply = cleanAiReply(reply);
 
   const forbiddenPatterns = [
     /system prompt/i,
@@ -523,6 +519,16 @@ function validateReply(reply: string, params: GenerateAiReplyParams) {
     throw new Error("AI reply included internal/private wording.");
   }
 
+  return cleanReply;
+}
+
+function validateReply(reply: string, params: GenerateAiReplyParams) {
+  let cleanReply = checkForbiddenPrivateWording(reply);
+
+  if (!cleanReply) {
+    throw new Error("OpenAI returned an empty reply.");
+  }
+
   if (!params.isFirstCustomerChat) {
     cleanReply = removeRepeatedIntro(cleanReply);
 
@@ -534,26 +540,91 @@ function validateReply(reply: string, params: GenerateAiReplyParams) {
   return cleanReply;
 }
 
+function validateOrchestratorReply(reply: string) {
+  const cleanReply = checkForbiddenPrivateWording(reply);
+
+  if (!cleanReply) {
+    throw new Error("Nero booking orchestrator returned an empty reply.");
+  }
+
+  return cleanReply;
+}
+
+function shouldUseBookingOrchestrator(params: GenerateAiReplyParams) {
+  return Boolean(cleanText(params.contactId));
+}
+
+async function maybeRunBookingOrchestrator(
+  params: GenerateAiReplyParams
+): Promise<string | null> {
+  if (!shouldUseBookingOrchestrator(params)) {
+    return null;
+  }
+
+  const customerMessage = cleanText(params.customerMessage);
+
+  const incomingMessage: NeroIncomingMessage = {
+    contactId: cleanText(params.contactId),
+    phone: cleanText(params.phone) || null,
+    customerName: cleanText(params.customerName) || null,
+    text: customerMessage || (params.hasMedia ? "[media received]" : ""),
+    language: cleanText(params.detectedLanguage) || null,
+    hasMedia: Boolean(params.hasMedia),
+    mediaType: params.mediaType || null,
+  };
+
+  const result = await runNeroBookingOrchestrator(incomingMessage);
+
+  console.log("[NERO_BOOKING_ORCHESTRATOR_RESULT]", {
+    handled: result.handled,
+    shouldContinueToAi: result.shouldContinueToAi,
+    needsHumanAttention: result.needsHumanAttention,
+    debugReason: result.debugReason,
+    sessionId: result.session?.id || null,
+    stage: result.session?.stage || null,
+    status: result.session?.status || null,
+  });
+
+  if (result.handled && result.reply) {
+    return validateOrchestratorReply(result.reply);
+  }
+
+  return null;
+}
+
 export async function generateAiReply(params: GenerateAiReplyParams) {
+  const customerMessage = cleanText(params.customerMessage);
+  const hasMedia = Boolean(params.hasMedia);
+
+  if (!customerMessage && !hasMedia) {
+    throw new Error("Customer message is empty.");
+  }
+
+  const orchestratorReply = await maybeRunBookingOrchestrator(params);
+
+  if (orchestratorReply) {
+    return orchestratorReply;
+  }
+
   const apiKey = process.env.OPENAI_API_KEY?.trim();
 
   if (!apiKey) {
     throw new Error("OpenAI is not configured.");
   }
 
-  const customerMessage = cleanText(params.customerMessage);
-
-  if (!customerMessage) {
-    throw new Error("Customer message is empty.");
-  }
-
   const model = getModel();
 
   const messages = buildMessages({
-    customerMessage,
+    customerMessage: customerMessage || "[media received]",
     recentMessages: params.recentMessages || [],
     isFirstCustomerChat: Boolean(params.isFirstCustomerChat),
     humanHandback: Boolean(params.humanHandback),
+    contactId: params.contactId,
+    phone: params.phone,
+    customerName: params.customerName,
+    detectedLanguage: params.detectedLanguage,
+    hasMedia: params.hasMedia,
+    mediaType: params.mediaType,
   });
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {

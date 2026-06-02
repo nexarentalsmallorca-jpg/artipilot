@@ -165,4 +165,4 @@ self.addEventListener("notificationclick", (event) => {
         console.error("[ARTIPILOT_SW_NOTIFICATION_CLICK_FAILED]", error);
       })
   );
-});
+}); 
