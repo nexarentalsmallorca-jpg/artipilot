@@ -4,9 +4,7 @@ import {
   evaluateLicenceFromText,
   getEbikePriceMessage,
   getEmergencyHandoffMessage,
-  getLicenceQuestion,
   getNeroSeason,
-  getNormalHumanHandoffMessage,
   getOwnerPrivacyMessage,
   getScooterPriceMessage,
   NEXA_EMERGENCY_PHONE,
@@ -20,11 +18,9 @@ import {
 import {
   getActiveBookingSessionByContactId,
   getOrCreateBookingSession,
-  getBookingSessionSummary,
   markBookingSessionNeedsHuman,
   updateBookingSession,
   type BookingSession,
-  type BookingSessionStage,
 } from "@/lib/booking/whatsappBookingSession";
 
 export type NeroIncomingMessage = {
@@ -60,13 +56,13 @@ type DetectedIntent =
   | "support_problem"
   | "unknown";
 
+type LanguageCode = "en" | "es" | "fr" | "it" | "de" | "pt" | "sv";
+
 type DetectedPlan = {
   plan: "half_day" | "full_day" | "multi_day" | "ebike_hourly" | "ebike_day" | null;
   days: number | null;
   hours: 1 | 2 | 3 | 4 | null;
 };
-
-type LanguageCode = "en" | "es" | "fr" | "it" | "de" | "pt" | "sv";
 
 type AvailabilityResult =
   | {
@@ -136,6 +132,9 @@ function getLang(message?: NeroIncomingMessage | null): LanguageCode {
       "dirección",
       "carnet",
       "permiso",
+      "hoy",
+      "mañana",
+      "manana",
     ])
   ) {
     return "es";
@@ -152,6 +151,7 @@ function getLang(message?: NeroIncomingMessage | null): LanguageCode {
       "adresse",
       "réserver",
       "reserver",
+      "demain",
     ])
   ) {
     return "fr";
@@ -165,6 +165,8 @@ function getLang(message?: NeroIncomingMessage | null): LanguageCode {
       "prenotare",
       "prezzo",
       "patente",
+      "domani",
+      "oggi",
     ])
   ) {
     return "it";
@@ -186,15 +188,13 @@ function getLang(message?: NeroIncomingMessage | null): LanguageCode {
 }
 
 function humanHoursForLang(lang: LanguageCode) {
-  if (lang === "en") return HUMAN_HOURS_EN;
-  return HUMAN_HOURS_24H;
+  return lang === "en" ? HUMAN_HOURS_EN : HUMAN_HOURS_24H;
 }
 
 function detectIntent(message: NeroIncomingMessage): DetectedIntent {
   const text = normalizeText(message.text);
 
   if (message.hasMedia) return "media";
-
   if (!text) return "unknown";
 
   if (
@@ -218,8 +218,6 @@ function detectIntent(message: NeroIncomingMessage): DetectedIntent {
       "urgence",
       "blessé",
       "blesse",
-      "danger",
-      "police",
       "incidente",
       "ferito",
     ])
@@ -254,7 +252,6 @@ function detectIntent(message: NeroIncomingMessage): DetectedIntent {
       "panne",
       "batterie",
       "crevaison",
-      "scooter ne marche pas",
       "non funziona",
       "batteria",
       "foratura",
@@ -463,9 +460,7 @@ function detectVehicleType(
     return "scooter";
   }
 
-  if (/\bbike\b/.test(text)) {
-    return "ebike";
-  }
+  if (/\bbike\b/.test(text)) return "ebike";
 
   return null;
 }
@@ -473,14 +468,11 @@ function detectVehicleType(
 function detectQuantity(textInput: string | null | undefined): number | null {
   const text = normalizeText(textInput);
 
-  const scooterQtyMatch = text.match(
+  const qtyNearVehicle = text.match(
     /\b([1-9]|1[0-9]|20)\s*(scooters?|motos?|motorbikes?|e-?bikes?|bikes?|bicis?|bicicletas?)\b/
   );
 
-  if (scooterQtyMatch) return Number(scooterQtyMatch[1]);
-
-  const digitMatch = text.match(/\b([1-9]|1[0-9]|20)\b/);
-  if (digitMatch) return Number(digitMatch[1]);
+  if (qtyNearVehicle) return Number(qtyNearVehicle[1]);
 
   const words: Record<string, number> = {
     one: 1,
@@ -604,9 +596,7 @@ function normalizePlanForVehicle(
   vehicleType: "scooter" | "ebike",
   planInfo: DetectedPlan
 ): DetectedPlan {
-  if (vehicleType !== "ebike") {
-    return planInfo;
-  }
+  if (vehicleType !== "ebike") return planInfo;
 
   if (planInfo.plan === "full_day") {
     return {
@@ -636,7 +626,6 @@ function addDays(date: Date, days: number) {
 function detectDateText(textInput: string | null | undefined): string | null {
   const raw = String(textInput || "").trim();
   const text = normalizeText(raw);
-
   const today = new Date();
 
   if (/\btoday\b|\bhoy\b|\baujourd'hui\b|\boggi\b/.test(text)) {
@@ -678,48 +667,43 @@ function detectDateText(textInput: string | null | undefined): string | null {
     jan: 1,
     enero: 1,
     janvier: 1,
-    febbraio: 2,
     february: 2,
     feb: 2,
     febrero: 2,
     fevrier: 2,
-    mars: 3,
+    février: 2,
     march: 3,
     mar: 3,
     marzo: 3,
-    avril: 4,
+    mars: 3,
     april: 4,
     apr: 4,
     abril: 4,
-    aprile: 4,
+    avril: 4,
     may: 5,
     mayo: 5,
     mai: 5,
-    maggio: 5,
     june: 6,
     jun: 6,
     junio: 6,
     juin: 6,
-    giugno: 6,
     july: 7,
     jul: 7,
     julio: 7,
     juillet: 7,
-    luglio: 7,
     august: 8,
     aug: 8,
     agosto: 8,
     aout: 8,
-    septiembre: 9,
+    août: 8,
     september: 9,
     sep: 9,
+    septiembre: 9,
     septembre: 9,
-    settembre: 9,
     october: 10,
     oct: 10,
     octubre: 10,
     octobre: 10,
-    ottobre: 10,
     november: 11,
     nov: 11,
     noviembre: 11,
@@ -728,11 +712,13 @@ function detectDateText(textInput: string | null | undefined): string | null {
     dec: 12,
     diciembre: 12,
     decembre: 12,
-    dicembre: 12,
+    décembre: 12,
   };
 
+  const monthAlternatives = Object.keys(monthNames).join("|");
+
   const dayMonthMatch = text.match(
-    /\b(\d{1,2})(?:st|nd|rd|th)?\s+(january|jan|enero|janvier|february|feb|febrero|fevrier|march|mar|marzo|mars|april|apr|abril|avril|may|mayo|mai|june|jun|junio|juin|july|jul|julio|juillet|august|aug|agosto|aout|september|sep|septiembre|septembre|october|oct|octubre|octobre|november|nov|noviembre|novembre|december|dec|diciembre|decembre)\b/
+    new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${monthAlternatives})\\b`)
   );
 
   if (dayMonthMatch) {
@@ -745,7 +731,7 @@ function detectDateText(textInput: string | null | undefined): string | null {
   }
 
   const monthDayMatch = text.match(
-    /\b(january|jan|enero|janvier|february|feb|febrero|fevrier|march|mar|marzo|mars|april|apr|abril|avril|may|mayo|mai|june|jun|junio|juin|july|jul|julio|juillet|august|aug|agosto|aout|september|sep|septiembre|septembre|october|oct|octubre|octobre|november|nov|noviembre|novembre|december|dec|diciembre|decembre)\s+(\d{1,2})(?:st|nd|rd|th)?\b/
+    new RegExp(`\\b(${monthAlternatives})\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b`)
   );
 
   if (monthDayMatch) {
@@ -768,16 +754,26 @@ function detectTimeText(textInput: string | null | undefined): string | null {
     return `${colonMatch[1].padStart(2, "0")}:${colonMatch[2]}`;
   }
 
-  const hourMatch = text.match(/\b([1-9]|1[0-9]|2[0-3])\s*(am|pm|h)\b/);
-  if (!hourMatch) return null;
+  const hourWithSuffix = text.match(/\b([1-9]|1[0-9]|2[0-3])\s*(am|pm|h)\b/);
+  if (hourWithSuffix) {
+    let hour = Number(hourWithSuffix[1]);
+    const suffix = hourWithSuffix[2];
 
-  let hour = Number(hourMatch[1]);
-  const suffix = hourMatch[2];
+    if (suffix === "pm" && hour < 12) hour += 12;
+    if (suffix === "am" && hour === 12) hour = 0;
 
-  if (suffix === "pm" && hour < 12) hour += 12;
-  if (suffix === "am" && hour === 12) hour = 0;
+    return `${String(hour).padStart(2, "0")}:00`;
+  }
 
-  return `${String(hour).padStart(2, "0")}:00`;
+  const timeWords = text.match(
+    /\b(at|around|sobre|a las|vers|alle)\s+([1-9]|1[0-9]|2[0-3])\b/
+  );
+
+  if (timeWords) {
+    return `${String(Number(timeWords[2])).padStart(2, "0")}:00`;
+  }
+
+  return null;
 }
 
 function detectEmail(textInput: string | null | undefined): string | null {
@@ -823,6 +819,11 @@ function isAffirmative(textInput: string | null | undefined): boolean {
       "i have license",
       "we have licence",
       "we have license",
+      "b licence",
+      "b license",
+      "3 years",
+      "more than 3",
+      "more than three",
       "tengo carnet",
       "tenemos carnet",
       "j'ai le permis",
@@ -833,20 +834,7 @@ function isAffirmative(textInput: string | null | undefined): boolean {
 
 function isNegative(textInput: string | null | undefined): boolean {
   const text = normalizeText(textInput);
-
   return /^(no|nope|not|dont|don't|do not|non|no tengo|sin carnet)\b/.test(text);
-}
-
-function makeIntroIfNeeded(
-  session: BookingSession,
-  message: NeroIncomingMessage
-): string {
-  const alreadyIntroduced = Boolean(session.metadata?.nero_introduced);
-
-  if (alreadyIntroduced) return "";
-  if (!message.isFirstCustomerChat) return "";
-
-  return "Hi, I’m Nero, the AI assistant created by NEXA Rentals 😊\n\n";
 }
 
 function mergeMetadata(
@@ -863,7 +851,6 @@ function formatDateForCustomer(date: string | null | undefined) {
   if (!date) return null;
 
   const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-
   if (!match) return date;
 
   return `${match[3]}/${match[2]}/${match[1]}`;
@@ -874,9 +861,22 @@ function vehicleLabel(vehicleType: "scooter" | "ebike" | null | undefined) {
   return "125cc scooter";
 }
 
+function pluralVehicleLabel(
+  vehicleType: "scooter" | "ebike" | null | undefined,
+  quantity: number | null | undefined
+) {
+  const qty = quantity || 1;
+
+  if (vehicleType === "ebike") {
+    return qty === 1 ? "e-bike" : "e-bikes";
+  }
+
+  return qty === 1 ? "125cc scooter" : "125cc scooters";
+}
+
 function planLabel(session: BookingSession) {
   if (session.plan === "half_day") return "Half Day";
-  if (session.plan === "full_day") return "Full Day / 24 hours";
+  if (session.plan === "full_day") return "1 day / 24 hours";
   if (session.plan === "multi_day") {
     const days = Number(session.metadata?.requested_days || 2);
     return `${days} days`;
@@ -891,11 +891,10 @@ function planLabel(session: BookingSession) {
 
 function makeBookingContext(session: BookingSession) {
   const parts = [];
+  const qty = session.quantity || 1;
 
-  if (session.quantity) {
-    parts.push(`${session.quantity} ${vehicleLabel(session.vehicle_type)}`);
-  } else if (session.vehicle_type) {
-    parts.push(vehicleLabel(session.vehicle_type));
+  if (session.vehicle_type) {
+    parts.push(`${qty} ${pluralVehicleLabel(session.vehicle_type, qty)}`);
   }
 
   const date = formatDateForCustomer(session.pickup_date);
@@ -907,23 +906,6 @@ function makeBookingContext(session: BookingSession) {
   if (plan) parts.push(`(${plan})`);
 
   return parts.join(" ");
-}
-
-function makePriceOptionsReply(input: {
-  vehicleType: "scooter" | "ebike";
-  pickupDate?: string | null;
-}) {
-  if (input.vehicleType === "ebike") {
-    return `${getEbikePriceMessage()}\n\nWhich option would you like?`;
-  }
-
-  return `${getScooterPriceMessage(
-    input.pickupDate
-  )}\n\nWhich option would you like: Half Day, 1 day, or multiple days?`;
-}
-
-function licenceQuestionForBooking(message: NeroIncomingMessage) {
-  return getLicenceQuestion(message.language);
 }
 
 function getNormalHumanMessage(lang: LanguageCode) {
@@ -1044,25 +1026,131 @@ function getLocationReply(lang: LanguageCode) {
   return `We are located in Magaluf. Here is the location link:\n${NEXA_LOCATION_URL}`;
 }
 
-function getNextQuestionForStage(
-  stage: BookingSessionStage,
-  message: NeroIncomingMessage
-): string {
-  if (stage === "licence_check") return licenceQuestionForBooking(message);
-  if (stage === "plan_selection") {
-    return "Which plan would you like: Half Day, 1 day / 24 hours, or multiple days?";
+function getLicenceQuestion(lang: LanguageCode) {
+  if (lang === "es") {
+    return "¿Los conductores tienen carnet A1/A2/A, o carnet B de coche con al menos 3 años?";
   }
-  if (stage === "collect_date") return "What pickup date would you like?";
-  if (stage === "collect_time") return "What pickup time would you prefer?";
-  if (stage === "collect_customer_details") {
-    return "Please send your full name and email so I can prepare the booking.";
-  }
-  if (stage === "waiting_payment") {
-    return "Your payment link is being prepared. Once payment is completed, your booking can be confirmed.";
-  }
-  if (stage === "needs_human") return getNormalHumanMessage(getLang(message));
 
-  return "I’ll help you with that. Could you send the missing booking details?";
+  if (lang === "fr") {
+    return "Les conducteurs ont-ils un permis A1/A2/A, ou un permis B voiture depuis au moins 3 ans ?";
+  }
+
+  if (lang === "it") {
+    return "I conducenti hanno una patente A1/A2/A, oppure una patente B da almeno 3 anni?";
+  }
+
+  if (lang === "de") {
+    return "Haben die Fahrer einen A1/A2/A Führerschein oder einen B-Autoführerschein seit mindestens 3 Jahren?";
+  }
+
+  return "Do the drivers have valid A1/A2/A licences, or B car licences held for at least 3 years?";
+}
+
+function getMissingFields(session: BookingSession): string[] {
+  const missing: string[] = [];
+  const vehicleType = session.vehicle_type || "scooter";
+
+  if (!session.vehicle_type) missing.push("vehicle_type");
+
+  if (vehicleType === "scooter" && session.licence_status !== "eligible") {
+    missing.push("licence");
+  }
+
+  if (!session.pickup_date) missing.push("pickup_date");
+  if (!session.plan) missing.push("plan");
+  if (!session.pickup_time) missing.push("pickup_time");
+
+  if (!session.customer_name || !session.customer_email) {
+    missing.push("customer_details");
+  }
+
+  return missing;
+}
+
+function makeSmartNextReply(
+  session: BookingSession,
+  message: NeroIncomingMessage,
+  intro = ""
+): string {
+  const lang = getLang(message);
+  const context = makeBookingContext(session);
+  const vehicleType = session.vehicle_type || "scooter";
+  const missing = getMissingFields(session);
+
+  const prefix = context
+    ? `${intro}Perfect, I can help with ${context}.`
+    : `${intro}Perfect, I can help with that.`;
+
+  const needsLicence = missing.includes("licence");
+  const needsDate = missing.includes("pickup_date");
+  const needsPlan = missing.includes("plan");
+  const needsTime = missing.includes("pickup_time");
+  const needsCustomerDetails = missing.includes("customer_details");
+
+  if (vehicleType === "ebike") {
+    if (needsDate && needsPlan) {
+      return `${prefix}\n\nWhat date would you like it for, and which e-bike option do you prefer: 1 hour, 2 hours, 3 hours, 4 hours, or 1 day?`;
+    }
+
+    if (needsDate) return `${prefix}\n\nWhat pickup date would you like?`;
+    if (needsPlan) {
+      return `${prefix}\n\nWhich e-bike option do you prefer: 1 hour, 2 hours, 3 hours, 4 hours, or 1 day?`;
+    }
+    if (needsTime) return `${prefix}\n\nWhat pickup time would you prefer?`;
+    if (needsCustomerDetails) {
+      return `${prefix}\n\nPlease send your full name and email so I can prepare the booking.`;
+    }
+
+    return `${prefix}\n\nLet me check availability before preparing the payment link.`;
+  }
+
+  if (needsLicence && needsPlan) {
+    return `${prefix}\n\nBefore checking availability, ${getLicenceQuestion(
+      lang
+    )}\n\nAlso, would you prefer Half Day or 1 day / 24 hours?`;
+  }
+
+  if (needsLicence && needsDate) {
+    return `${prefix}\n\nBefore checking availability, ${getLicenceQuestion(
+      lang
+    )}\n\nAlso, what pickup date would you like?`;
+  }
+
+  if (needsLicence) {
+    return `${prefix}\n\nBefore checking availability, ${getLicenceQuestion(lang)}`;
+  }
+
+  if (needsDate) return `${prefix}\n\nWhat pickup date would you like?`;
+
+  if (needsPlan) {
+    return `${prefix}\n\nWhich plan would you like: Half Day, 1 day / 24 hours, or multiple days?`;
+  }
+
+  if (needsTime) return `${prefix}\n\nWhat pickup time would you prefer?`;
+
+  if (needsCustomerDetails) {
+    return `${prefix}\n\nPlease send your full name and email so I can prepare the booking.`;
+  }
+
+  return `${prefix}\n\nLet me check live availability before preparing the payment link.`;
+}
+
+function getPriceReply(session: BookingSession, message: NeroIncomingMessage) {
+  const vehicleType = detectVehicleType(message.text) || session.vehicle_type || "scooter";
+  const priceText =
+    vehicleType === "ebike"
+      ? getEbikePriceMessage()
+      : getScooterPriceMessage(session.pickup_date);
+
+  const context = makeBookingContext(session);
+  const after =
+    vehicleType === "scooter"
+      ? "For your booking, would you prefer Half Day or 1 day / 24 hours?"
+      : "For your booking, which e-bike option would you prefer?";
+
+  return context
+    ? `${priceText}\n\nFor ${context}, ${after.charAt(0).toLowerCase()}${after.slice(1)}`
+    : `${priceText}\n\n${after}`;
 }
 
 async function getSessionForIntent(
@@ -1099,7 +1187,7 @@ async function getSessionForIntent(
     customerName: message.customerName,
     metadata: {
       source: "whatsapp",
-      nero_introduced: Boolean(message.isFirstCustomerChat),
+      nero_introduced: true,
     },
   });
 
@@ -1141,7 +1229,9 @@ async function updateSessionFromMessage(
     ? normalizePlanForVehicle(finalVehicleType, rawPlanInfo)
     : rawPlanInfo;
 
-  if (planInfo.plan && !session.plan) patch.plan = planInfo.plan;
+  if (planInfo.plan) {
+    patch.plan = planInfo.plan;
+  }
 
   if (planInfo.days) {
     metadataPatch = {
@@ -1158,13 +1248,13 @@ async function updateSessionFromMessage(
   }
 
   const pickupDate = detectDateText(text);
-  if (pickupDate && !session.pickup_date) patch.pickup_date = pickupDate;
+  if (pickupDate) patch.pickup_date = pickupDate;
 
   const pickupTime = detectTimeText(text);
-  if (pickupTime && !session.pickup_time) patch.pickup_time = pickupTime;
+  if (pickupTime) patch.pickup_time = pickupTime;
 
   const email = detectEmail(text);
-  if (email && !session.customer_email) patch.customer_email = email;
+  if (email) patch.customer_email = email;
 
   const customerName = detectCustomerName(text) || message.customerName;
   if (customerName && !session.customer_name) patch.customer_name = customerName;
@@ -1179,132 +1269,20 @@ async function updateSessionFromMessage(
   return updated || session;
 }
 
-async function setMetadata(
-  session: BookingSession,
-  patch: Record<string, unknown>
-): Promise<BookingSession> {
-  const updated = await updateBookingSession(session.id, {
-    metadata: mergeMetadata(session, patch),
-  });
-
-  return updated || session;
-}
-
-async function moveEbikeSessionToPlanSelection(
-  session: BookingSession,
-  message: NeroIncomingMessage
-): Promise<BookingSession> {
-  const updated = await updateBookingSession(session.id, {
-    vehicle_type: "ebike",
-    licence_status: "eligible",
-    licence_notes: "E-bike flow does not require 125cc scooter licence check.",
-    stage: "plan_selection",
-    metadata: mergeMetadata(session, {
-      nero_introduced:
-        Boolean(session.metadata?.nero_introduced) ||
-        Boolean(message.isFirstCustomerChat),
-    }),
-  });
-
-  return updated || session;
-}
-
 async function markLicenceEligible(
   session: BookingSession,
-  reason: string,
-  message: NeroIncomingMessage
+  reason: string
 ): Promise<BookingSession> {
   const updated = await updateBookingSession(session.id, {
-    vehicle_type: session.vehicle_type || "scooter",
+    vehicle_type: "scooter",
     licence_status: "eligible",
     licence_notes: reason,
-    stage: "plan_selection",
     metadata: mergeMetadata(session, {
-      nero_introduced:
-        Boolean(session.metadata?.nero_introduced) ||
-        Boolean(message.isFirstCustomerChat),
       asked_licence: true,
     }),
   });
 
   return updated || session;
-}
-
-function getMissingFields(session: BookingSession): string[] {
-  const missing: string[] = [];
-  const vehicleType = session.vehicle_type || "scooter";
-
-  if (!session.vehicle_type) missing.push("vehicle_type");
-
-  if (vehicleType === "scooter" && session.licence_status !== "eligible") {
-    missing.push("licence");
-  }
-
-  if (!session.pickup_date) missing.push("pickup_date");
-  if (!session.plan) missing.push("plan");
-  if (!session.pickup_time) missing.push("pickup_time");
-  if (!session.customer_name || !session.customer_email) {
-    missing.push("customer_details");
-  }
-
-  return missing;
-}
-
-function getSmartBookingQuestion(
-  session: BookingSession,
-  message: NeroIncomingMessage,
-  intro = ""
-): string {
-  const context = makeBookingContext(session);
-  const vehicleType = session.vehicle_type || "scooter";
-  const missing = getMissingFields(session);
-
-  const prefix = context
-    ? `${intro}Perfect, I can help with ${context}.`
-    : `${intro}Perfect, I can help with that.`;
-
-  const needsLicence = missing.includes("licence");
-  const needsDate = missing.includes("pickup_date");
-  const needsPlan = missing.includes("plan");
-  const needsTime = missing.includes("pickup_time");
-  const needsCustomerDetails = missing.includes("customer_details");
-
-  if (vehicleType === "ebike") {
-    if (needsDate && needsPlan) {
-      return `${prefix}\n\nWhat date would you like it for, and which e-bike option do you prefer: 1 hour, 2 hours, 3 hours, 4 hours, or 1 day?`;
-    }
-
-    if (needsDate) return `${prefix}\n\nWhat pickup date would you like?`;
-    if (needsPlan) return `${prefix}\n\nWhich e-bike option do you prefer: 1 hour, 2 hours, 3 hours, 4 hours, or 1 day?`;
-    if (needsTime) return `${prefix}\n\nWhat pickup time would you prefer?`;
-    if (needsCustomerDetails) {
-      return `${prefix}\n\nPlease send your full name and email so I can prepare the booking.`;
-    }
-
-    return `${prefix}\n\nLet me check availability before preparing the payment link.`;
-  }
-
-  if (needsLicence && needsDate) {
-    return `${prefix}\n\nBefore checking availability, can you confirm the drivers have valid A1/A2/A licences, or B car licences held for at least 3 years?\n\nAlso, what pickup date would you like?`;
-  }
-
-  if (needsLicence) {
-    return `${prefix}\n\nBefore checking availability, can you confirm the drivers have valid A1/A2/A licences, or B car licences held for at least 3 years?`;
-  }
-
-  if (needsDate) return `${prefix}\n\nWhat pickup date would you like?`;
-
-  if (needsPlan) {
-    return `${prefix}\n\nWhich plan would you like: Half Day, 1 day / 24 hours, or multiple days?`;
-  }
-
-  if (needsTime) return `${prefix}\n\nWhat pickup time would you prefer?`;
-
-  if (needsCustomerDetails) {
-    return `${prefix}\n\nPlease send your full name and email so I can prepare the booking.`;
-  }
-
-  return `${prefix}\n\nLet me check live availability before preparing the payment link.`;
 }
 
 async function calculateAndSavePrice(
@@ -1372,9 +1350,7 @@ function getWebsiteAvailabilityConfig() {
     process.env.NEXA_WEBSITE_INTERNAL_SECRET?.trim() ||
     process.env.NEXA_INTERNAL_API_SECRET?.trim();
 
-  if (!url || !secret) {
-    return null;
-  }
+  if (!url || !secret) return null;
 
   return { url, secret };
 }
@@ -1494,12 +1470,6 @@ function getAvailabilityUnavailableReply(
       : `Je ne peux pas confirmer automatiquement la disponibilité pour cette demande.\n\nJe vais la transmettre à l’équipe afin qu’elle vérifie et vous propose la meilleure solution possible.`;
   }
 
-  if (lang === "it") {
-    return available !== null
-      ? `Per la data selezionata vedo solo ${available} disponibile/i, ma ne hai richiesti ${requested}.\n\nPasso la richiesta al team, così possono cercare una soluzione, anche tramite un partner se possibile.`
-      : `Non posso confermare automaticamente la disponibilità per questa richiesta.\n\nLa passo al team così possono verificare e aiutarti con la soluzione migliore.`;
-  }
-
   return available !== null
     ? `For the selected date, I can only see ${available} available, but you requested ${requested}.\n\nI’ll pass this to the team so they can try to help, for example by checking another solution or arranging an extra unit through a partner company if possible.`
     : `I can’t automatically confirm live availability for this request yet.\n\nI’ll pass it to the team so they can check and help with the best possible solution.`;
@@ -1556,393 +1526,69 @@ async function handleAvailabilityCheck(
   };
 }
 
-async function handleLicenceStage(
-  session: BookingSession,
-  message: NeroIncomingMessage
-): Promise<NeroOrchestratorResult> {
-  const intro = makeIntroIfNeeded(session, message);
-  const text = message.text || "";
-  const vehicleType = session.vehicle_type || detectVehicleType(text) || "scooter";
-
-  if (vehicleType === "ebike") {
-    const updated = await moveEbikeSessionToPlanSelection(session, message);
-
-    return {
-      handled: true,
-      reply: getSmartBookingQuestion(updated, message, intro),
-      session: updated,
-      shouldContinueToAi: false,
-      needsHumanAttention: false,
-      debugReason: "ebike skips scooter licence check",
-    };
-  }
-
-  if (isNegative(text)) {
-    const updated = await updateBookingSession(session.id, {
-      vehicle_type: "scooter",
-      licence_status: "not_eligible",
-      licence_notes: "Customer said they do not have the required licence.",
-      metadata: mergeMetadata(session, {
-        nero_introduced:
-          Boolean(session.metadata?.nero_introduced) ||
-          Boolean(message.isFirstCustomerChat),
-      }),
-    });
-
-    return {
-      handled: true,
-      reply:
-        `${intro}For 125cc scooters in Spain, the drivers need a valid A1/A2/A licence, or a B car licence held for at least 3 years.\n\n` +
-        "If you don’t have that, I can help you with e-bikes instead.",
-      session: updated || session,
-      shouldContinueToAi: false,
-      needsHumanAttention: false,
-      debugReason: "licence negative",
-    };
-  }
-
-  const licenceResult = evaluateLicenceFromText(text);
-
-  if (licenceResult.status === "eligible" || isAffirmative(text)) {
-    const updated = await markLicenceEligible(
-      session,
-      licenceResult.status === "eligible"
-        ? licenceResult.reason
-        : "Customer confirmed they have the required licence after Nero asked.",
-      message
-    );
-
-    return continueBookingFlow(updated, message, intro);
-  }
-
-  if (licenceResult.status === "not_eligible") {
-    const updated = await updateBookingSession(session.id, {
-      vehicle_type: "scooter",
-      licence_status: "not_eligible",
-      licence_notes: licenceResult.reason,
-      metadata: mergeMetadata(session, {
-        nero_introduced:
-          Boolean(session.metadata?.nero_introduced) ||
-          Boolean(message.isFirstCustomerChat),
-      }),
-    });
-
-    return {
-      handled: true,
-      reply:
-        `${intro}Sorry, for 125cc scooters in Spain we can only accept a valid A1/A2/A licence, or a B car licence held for at least 3 years.\n\n` +
-        `${licenceResult.reason}\n\n` +
-        "If you prefer, I can help you with an e-bike rental.",
-      session: updated || session,
-      shouldContinueToAi: false,
-      needsHumanAttention: false,
-      debugReason: "licence not eligible",
-    };
-  }
-
-  if (licenceResult.status === "needs_team_review") {
-    const updated = await markBookingSessionNeedsHuman(
-      session.id,
-      licenceResult.reason
-    );
-
-    return {
-      handled: true,
-      reply:
-        `${intro}Thanks. This licence needs team review before we can confirm the rental.\n\n` +
-        "Please bring the original driving licence and ID/passport at pickup. If it is a non-EU licence, you may also need an International Driving Permit.\n\n" +
-        getNormalHumanMessage(getLang(message)),
-      session: updated || session,
-      shouldContinueToAi: false,
-      needsHumanAttention: true,
-      debugReason: "licence needs team review",
-    };
-  }
-
-  const updated = await setMetadata(session, {
-    asked_licence: true,
-    nero_introduced:
-      Boolean(session.metadata?.nero_introduced) ||
-      Boolean(message.isFirstCustomerChat),
-  });
-
-  return {
-    handled: true,
-    reply: getSmartBookingQuestion(updated, message, intro),
-    session: updated,
-    shouldContinueToAi: false,
-    needsHumanAttention: false,
-    debugReason: "licence unclear, asked smart question",
-  };
-}
-
-async function handlePlanStage(
-  session: BookingSession,
-  message: NeroIncomingMessage
-): Promise<NeroOrchestratorResult> {
-  const text = message.text || "";
-  const detectedVehicleType = detectVehicleType(text);
-  const vehicleType = detectedVehicleType || session.vehicle_type || "scooter";
-  const rawPlanInfo = detectPlan(text);
-  const planInfo = normalizePlanForVehicle(vehicleType, rawPlanInfo);
-  const quantity = detectQuantity(text) || session.quantity || 1;
-
-  if (!planInfo.plan) {
-    return {
-      handled: true,
-      reply: getSmartBookingQuestion(session, message),
-      session,
-      shouldContinueToAi: false,
-      needsHumanAttention: false,
-      debugReason: "plan missing",
-    };
-  }
-
-  let updated = await updateBookingSession(session.id, {
-    vehicle_type: vehicleType,
-    quantity,
-    plan: planInfo.plan,
-    stage: "collect_date",
-    metadata: mergeMetadata(session, {
-      requested_days: planInfo.days || session.metadata?.requested_days || null,
-      requested_hours: planInfo.hours || session.metadata?.requested_hours || null,
-    }),
-  });
-
-  updated = updated || session;
-
-  if (vehicleType === "ebike" && planInfo.plan === "multi_day") {
-    updated =
-      (await markBookingSessionNeedsHuman(
-        updated.id,
-        "E-bike multi-day rental requested. Team must confirm manually."
-      )) || updated;
-
-    return {
-      handled: true,
-      reply:
-        "E-bikes are normally rented for up to 1 day. For more than 1 day, I’ll forward this to the team so they can confirm manually.",
-      session: updated,
-      shouldContinueToAi: false,
-      needsHumanAttention: true,
-      debugReason: "ebike multi day needs human",
-    };
-  }
-
-  return continueBookingFlow(updated, message);
-}
-
-async function handleDateStage(
-  session: BookingSession,
-  message: NeroIncomingMessage
-): Promise<NeroOrchestratorResult> {
-  const pickupDate = detectDateText(message.text);
-
-  if (!pickupDate) {
-    return {
-      handled: true,
-      reply: getSmartBookingQuestion(session, message),
-      session,
-      shouldContinueToAi: false,
-      needsHumanAttention: false,
-      debugReason: "date missing",
-    };
-  }
-
-  const updated =
-    (await updateBookingSession(session.id, {
-      pickup_date: pickupDate,
-      stage: "collect_time",
-    })) || session;
-
-  return continueBookingFlow(updated, message);
-}
-
-async function handleTimeStage(
-  session: BookingSession,
-  message: NeroIncomingMessage
-): Promise<NeroOrchestratorResult> {
-  const pickupTime = detectTimeText(message.text);
-
-  if (!pickupTime) {
-    return {
-      handled: true,
-      reply: getSmartBookingQuestion(session, message),
-      session,
-      shouldContinueToAi: false,
-      needsHumanAttention: false,
-      debugReason: "time missing",
-    };
-  }
-
-  const plan = session.plan || "full_day";
-  const requestedDays = Number(session.metadata?.requested_days || 1);
-  const returnTime = pickupTime;
-
-  let validation = {
-    valid: true,
-    needsHuman: false,
-    reason: null as string | null,
-  };
-
-  if (plan === "half_day") {
-    validation = validateHalfDayTimes({
-      pickupTime,
-      returnTime: "19:00",
-    });
-  } else if (plan === "full_day" || plan === "multi_day") {
-    validation = validateFullDayTimes({
-      pickupTime,
-      returnTime,
-    });
-  }
-
-  if (!validation.valid && validation.needsHuman) {
-    const updated =
-      (await markBookingSessionNeedsHuman(
-        session.id,
-        validation.reason || "Custom return time needs team review."
-      )) || session;
-
-    return {
-      handled: true,
-      reply:
-        `${validation.reason}\n\n` +
-        "I’ll pass this request to the team so they can confirm if an exception is possible.",
-      session: updated,
-      shouldContinueToAi: false,
-      needsHumanAttention: true,
-      debugReason: "time needs human",
-    };
-  }
-
-  if (!validation.valid) {
-    return {
-      handled: true,
-      reply: validation.reason || "That time is not valid for this plan.",
-      session,
-      shouldContinueToAi: false,
-      needsHumanAttention: false,
-      debugReason: "invalid time",
-    };
-  }
-
-  const updated =
-    (await updateBookingSession(session.id, {
-      pickup_time: pickupTime,
-      return_time: returnTime,
-      stage: "collect_customer_details",
-      metadata: mergeMetadata(session, {
-        requested_days: requestedDays,
-      }),
-    })) || session;
-
-  return continueBookingFlow(updated, message);
-}
-
-async function handleCustomerDetailsStage(
-  session: BookingSession,
-  message: NeroIncomingMessage
-): Promise<NeroOrchestratorResult> {
-  const text = message.text || "";
-  const email = detectEmail(text) || session.customer_email;
-  const name =
-    detectCustomerName(text) || session.customer_name || message.customerName || null;
-
-  if (!name || !email) {
-    return {
-      handled: true,
-      reply: getSmartBookingQuestion(session, message),
-      session,
-      shouldContinueToAi: false,
-      needsHumanAttention: false,
-      debugReason: "customer details missing",
-    };
-  }
-
-  const updated =
-    (await updateBookingSession(session.id, {
-      customer_name: name,
-      customer_email: email,
-      stage: "check_availability",
-    })) || session;
-
-  return continueBookingFlow(updated, message);
-}
-
 async function continueBookingFlow(
   session: BookingSession,
-  message: NeroIncomingMessage,
-  intro = ""
+  message: NeroIncomingMessage
 ): Promise<NeroOrchestratorResult> {
   const vehicleType = session.vehicle_type || "scooter";
+  const missing = getMissingFields(session);
 
-  if (vehicleType === "scooter" && session.licence_status !== "eligible") {
-    const updated = await updateBookingSession(session.id, {
-      stage: "licence_check",
-    });
-
-    return handleLicenceStage(updated || session, message);
-  }
-
-  if (!session.pickup_date) {
-    const updated = await updateBookingSession(session.id, {
-      stage: "collect_date",
-    });
-
+  if (missing.length > 0) {
     return {
       handled: true,
-      reply: getSmartBookingQuestion(updated || session, message, intro),
-      session: updated || session,
+      reply: makeSmartNextReply(session, message),
+      session,
       shouldContinueToAi: false,
       needsHumanAttention: false,
-      debugReason: "asking missing date",
+      debugReason: `asking missing fields: ${missing.join(", ")}`,
     };
   }
 
-  if (!session.plan) {
-    const updated = await updateBookingSession(session.id, {
-      stage: "plan_selection",
+  if (vehicleType === "scooter" && session.plan === "half_day") {
+    const validation = validateHalfDayTimes({
+      pickupTime: session.pickup_time,
+      returnTime: "19:00",
     });
 
-    return {
-      handled: true,
-      reply: getSmartBookingQuestion(updated || session, message, intro),
-      session: updated || session,
-      shouldContinueToAi: false,
-      needsHumanAttention: false,
-      debugReason: "asking missing plan",
-    };
+    if (!validation.valid) {
+      return {
+        handled: true,
+        reply: validation.reason || "That time is not valid for Half Day.",
+        session,
+        shouldContinueToAi: false,
+        needsHumanAttention: false,
+        debugReason: "invalid half day time",
+      };
+    }
   }
 
-  if (!session.pickup_time) {
-    const updated = await updateBookingSession(session.id, {
-      stage: "collect_time",
+  if (
+    vehicleType === "scooter" &&
+    (session.plan === "full_day" || session.plan === "multi_day")
+  ) {
+    const validation = validateFullDayTimes({
+      pickupTime: session.pickup_time,
+      returnTime: session.return_time || session.pickup_time,
     });
 
-    return {
-      handled: true,
-      reply: getSmartBookingQuestion(updated || session, message, intro),
-      session: updated || session,
-      shouldContinueToAi: false,
-      needsHumanAttention: false,
-      debugReason: "asking missing time",
-    };
-  }
+    if (!validation.valid && validation.needsHuman) {
+      const updated =
+        (await markBookingSessionNeedsHuman(
+          session.id,
+          validation.reason || "Custom return time needs team review."
+        )) || session;
 
-  if (!session.customer_name || !session.customer_email) {
-    const updated = await updateBookingSession(session.id, {
-      stage: "collect_customer_details",
-    });
-
-    return {
-      handled: true,
-      reply: getSmartBookingQuestion(updated || session, message, intro),
-      session: updated || session,
-      shouldContinueToAi: false,
-      needsHumanAttention: false,
-      debugReason: "asking missing customer details",
-    };
+      return {
+        handled: true,
+        reply:
+          `${validation.reason}\n\n` +
+          "I’ll pass this request to the team so they can confirm if an exception is possible.",
+        session: updated,
+        shouldContinueToAi: false,
+        needsHumanAttention: true,
+        debugReason: "time needs human",
+      };
+    }
   }
 
   const updated =
@@ -1951,6 +1597,72 @@ async function continueBookingFlow(
     })) || session;
 
   return handleAvailabilityCheck(updated, message);
+}
+
+async function handleLicenceLogic(
+  session: BookingSession,
+  message: NeroIncomingMessage
+): Promise<BookingSession> {
+  const text = message.text || "";
+  const vehicleType = session.vehicle_type || detectVehicleType(text);
+
+  if (vehicleType === "ebike") {
+    const updated = await updateBookingSession(session.id, {
+      vehicle_type: "ebike",
+      licence_status: "eligible",
+      licence_notes: "E-bike flow does not require 125cc scooter licence check.",
+    });
+
+    return updated || session;
+  }
+
+  if (isNegative(text)) {
+    const updated = await updateBookingSession(session.id, {
+      vehicle_type: "scooter",
+      licence_status: "not_eligible",
+      licence_notes: "Customer said they do not have the required licence.",
+    });
+
+    return updated || session;
+  }
+
+  const licenceResult = evaluateLicenceFromText(text);
+
+  if (licenceResult.status === "eligible" || isAffirmative(text)) {
+    return markLicenceEligible(
+      session,
+      licenceResult.status === "eligible"
+        ? licenceResult.reason
+        : "Customer confirmed they have the required licence."
+    );
+  }
+
+  if (licenceResult.status === "not_eligible") {
+    const updated = await updateBookingSession(session.id, {
+      vehicle_type: "scooter",
+      licence_status: "not_eligible",
+      licence_notes: licenceResult.reason,
+    });
+
+    return updated || session;
+  }
+
+  if (licenceResult.status === "needs_team_review") {
+    const updated =
+      (await markBookingSessionNeedsHuman(session.id, licenceResult.reason)) ||
+      session;
+
+    return updated;
+  }
+
+  const updated = await updateBookingSession(session.id, {
+    vehicle_type: "scooter",
+    metadata: mergeMetadata(session, {
+      asked_licence: true,
+    }),
+  });
+
+  return updated || session;
 }
 
 async function handleMediaMessage(
@@ -2089,26 +1801,6 @@ export async function runNeroBookingOrchestrator(
     return handleMediaMessage(session, message);
   }
 
-  if (intent === "price" && session.stage === "licence_check") {
-    const vehicleType = detectVehicleType(text) || session.vehicle_type || "scooter";
-
-    return {
-      handled: true,
-      reply:
-        makePriceOptionsReply({
-          vehicleType,
-          pickupDate: session.pickup_date,
-        }) +
-        (vehicleType === "scooter"
-          ? "\n\nBefore checking availability for a 125cc scooter, I also need to confirm licence eligibility."
-          : "\n\nFor e-bikes, tell me which option you prefer and the pickup date."),
-      session,
-      shouldContinueToAi: false,
-      needsHumanAttention: false,
-      debugReason: "price before booking details",
-    };
-  }
-
   if (intent === "payment") {
     return {
       handled: true,
@@ -2122,27 +1814,48 @@ export async function runNeroBookingOrchestrator(
     };
   }
 
-  if (session.stage === "licence_check") {
-    return handleLicenceStage(session, message);
+  if (intent === "price") {
+    return {
+      handled: true,
+      reply: getPriceReply(session, message),
+      session,
+      shouldContinueToAi: false,
+      needsHumanAttention: false,
+      debugReason: "price question answered before stage logic",
+    };
   }
 
-  if (session.stage === "plan_selection") {
-    return handlePlanStage(session, message);
+  if (intent === "licence" || session.stage === "licence_check") {
+    session = await handleLicenceLogic(session, message);
+
+    if (session.status === "needs_human" || session.stage === "needs_human") {
+      return {
+        handled: true,
+        reply:
+          "Thanks. This needs team review before we can confirm the rental.\n\n" +
+          getNormalHumanMessage(lang),
+        session,
+        shouldContinueToAi: false,
+        needsHumanAttention: true,
+        debugReason: "licence needs human review",
+      };
+    }
+
+    if (session.licence_status === "not_eligible") {
+      return {
+        handled: true,
+        reply:
+          "For 125cc scooters in Spain, the drivers need a valid A1/A2/A licence, or a B car licence held for at least 3 years.\n\n" +
+          "If you don’t have that, I can help you with e-bikes instead.",
+        session,
+        shouldContinueToAi: false,
+        needsHumanAttention: false,
+        debugReason: "licence not eligible",
+      };
+    }
   }
 
-  if (session.stage === "collect_date") {
-    return handleDateStage(session, message);
-  }
-
-  if (session.stage === "collect_time") {
-    return handleTimeStage(session, message);
-  }
-
-  if (session.stage === "collect_customer_details") {
-    return handleCustomerDetailsStage(session, message);
-  }
-
-  if (session.stage === "check_availability") {
+  if (intent === "booking" || session.status === "active") {
     return continueBookingFlow(session, message);
   }
 
@@ -2193,25 +1906,12 @@ export async function runNeroBookingOrchestrator(
     };
   }
 
-  if (intent === "unknown") {
-    return {
-      handled: false,
-      reply: null,
-      session,
-      shouldContinueToAi: true,
-      needsHumanAttention: false,
-      debugReason: `unknown intent with active session. Session:\n${getBookingSessionSummary(
-        session
-      )}`,
-    };
-  }
-
   return {
-    handled: true,
-    reply: getNextQuestionForStage(session.stage, message),
+    handled: false,
+    reply: null,
     session,
-    shouldContinueToAi: false,
+    shouldContinueToAi: true,
     needsHumanAttention: false,
-    debugReason: "fallback next question",
+    debugReason: "letting OpenAI handle natural non-booking reply",
   };
 }
