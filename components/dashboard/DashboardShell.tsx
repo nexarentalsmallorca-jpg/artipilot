@@ -79,7 +79,6 @@ function getPushErrorMessage(payload: unknown, fallback: string) {
   return fallback;
 }
 
-
 async function parseJsonSafely(response: Response): Promise<PushApiResponse> {
   try {
     return (await response.json()) as PushApiResponse;
@@ -88,7 +87,11 @@ async function parseJsonSafely(response: Response): Promise<PushApiResponse> {
   }
 }
 
-function NotificationButton() {
+function NotificationButton({
+  hideWhenEnabled = false,
+}: {
+  hideWhenEnabled?: boolean;
+}) {
   const [status, setStatus] = useState<PushStatus>("checking");
   const [message, setMessage] = useState<string>("Checking notifications...");
   const [busy, setBusy] = useState(false);
@@ -205,14 +208,14 @@ function NotificationButton() {
       const registration = await getRegistration();
       const subscription = await registration.pushManager.getSubscription();
 
-     if (!subscription) {
-  setStatus("ready");
-  setMessage("Enable phone notifications for new WhatsApp messages.");
-  return;
-}
+      if (!subscription) {
+        setStatus("ready");
+        setMessage("Enable phone notifications for new WhatsApp messages.");
+        return;
+      }
 
-await saveSubscription(subscription);
-await checkServerSubscriptionStatus();
+      await saveSubscription(subscription);
+      await checkServerSubscriptionStatus();
 
       setStatus("enabled");
       setMessage("Notifications are enabled and saved.");
@@ -327,7 +330,9 @@ await checkServerSubscriptionStatus();
       }
 
       setStatus("ready");
-      setMessage("Notifications were reset. Enable again to create a fresh subscription.");
+      setMessage(
+        "Notifications were reset. Enable again to create a fresh subscription."
+      );
     } catch (error) {
       console.error("[ARTIPILOT_PUSH_RESET_FAILED]", error);
       setStatus("error");
@@ -353,6 +358,10 @@ await checkServerSubscriptionStatus();
     status === "missing_key" ||
     status === "denied" ||
     status === "checking";
+
+  if (hideWhenEnabled && isEnabled) {
+    return null;
+  }
 
   return (
     <div className="rounded-2xl border border-[#e9edef] bg-[#f7f8f8] p-3">
@@ -425,7 +434,7 @@ export default function DashboardShell({
   const pageTitle = getPageTitle(pathname);
 
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-[#f0f2f5] text-[#111b21]">
+    <div className="flex h-[100svh] max-h-[100svh] overflow-hidden bg-[#f0f2f5] text-[#111b21]">
       <aside className="hidden w-64 shrink-0 flex-col border-r border-[#d1d7db] bg-white md:flex">
         <div className="border-b border-[#e9edef] bg-[#f0f2f5] px-5 py-5">
           <div className="mb-4 flex items-center gap-3">
@@ -508,8 +517,8 @@ export default function DashboardShell({
           </Link>
         </header>
 
-        <div className="border-b border-[#d1d7db] bg-white px-3 py-2 md:hidden">
-          <NotificationButton />
+        <div className="shrink-0 border-b border-[#d1d7db] bg-white px-3 py-2 md:hidden">
+          <NotificationButton hideWhenEnabled />
         </div>
 
         <nav className="flex shrink-0 gap-2 overflow-x-auto border-b border-[#d1d7db] bg-white px-2 py-2 md:hidden">

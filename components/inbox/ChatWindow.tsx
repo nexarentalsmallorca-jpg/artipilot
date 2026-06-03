@@ -24,6 +24,10 @@ type ActionState = {
   human_attention_reason?: string | null;
 };
 
+type LocalReactionMap = Record<string, string>;
+
+const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "🙏"];
+
 function cleanString(value: unknown) {
   return String(value || "").trim();
 }
@@ -101,29 +105,12 @@ function getStatusLabel(status: string | null) {
 
   const cleanStatus = status.toLowerCase();
 
-  if (cleanStatus === "pending") {
-    return "Sending";
-  }
-
-  if (cleanStatus === "sent") {
-    return "Sent";
-  }
-
-  if (cleanStatus === "delivered") {
-    return "Delivered";
-  }
-
-  if (cleanStatus === "read") {
-    return "Read";
-  }
-
-  if (cleanStatus === "received") {
-    return "";
-  }
-
-  if (cleanStatus === "failed") {
-    return "Failed";
-  }
+  if (cleanStatus === "pending") return "Sending";
+  if (cleanStatus === "sent") return "Sent";
+  if (cleanStatus === "delivered") return "Delivered";
+  if (cleanStatus === "read") return "Read";
+  if (cleanStatus === "received") return "";
+  if (cleanStatus === "failed") return "Failed";
 
   return status;
 }
@@ -368,6 +355,7 @@ export default function ChatWindow({
     () => new Set()
   );
   const [localState, setLocalState] = useState<ActionState>({});
+  const [localReactions, setLocalReactions] = useState<LocalReactionMap>({});
 
   const contactId = contact?.id || contact?.phone || null;
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
@@ -410,6 +398,30 @@ export default function ChatWindow({
     window.dispatchEvent(new CustomEvent("artipilot:inbox-refresh"));
   }
 
+  function closeMenus() {
+    setChatMenuOpen(false);
+    setMessageMenuId(null);
+  }
+
+  function setReaction(messageId: string, reaction: string) {
+    setLocalReactions((current) => ({
+      ...current,
+      [messageId]: reaction,
+    }));
+
+    setMessageMenuId(null);
+  }
+
+  function removeReaction(messageId: string) {
+    setLocalReactions((current) => {
+      const next = { ...current };
+      delete next[messageId];
+      return next;
+    });
+
+    setMessageMenuId(null);
+  }
+
   async function patchContact(payload: Record<string, unknown>) {
     if (!contact?.id) {
       return;
@@ -444,7 +456,7 @@ export default function ChatWindow({
         });
       }
 
-      setChatMenuOpen(false);
+      closeMenus();
       refreshSoon();
     } catch (error) {
       setActionError(
@@ -456,7 +468,9 @@ export default function ChatWindow({
   }
 
   async function deleteSingleMessage(messageId: string) {
-    const confirmed = window.confirm("Delete this message from your inbox?");
+    const confirmed = window.confirm(
+      "Delete this message from your private inbox?\n\nImportant: WhatsApp Business API cannot remove an already-delivered message from the customer’s phone."
+    );
 
     if (!confirmed) {
       return;
@@ -503,7 +517,9 @@ export default function ChatWindow({
     }
 
     const confirmed = window.confirm(
-      `Delete the full chat with ${displayName(contact)}? This removes the conversation from your private inbox.`
+      `Delete the full chat with ${displayName(
+        contact
+      )} from your private inbox?\n\nThis does not delete messages from the customer’s WhatsApp phone.`
     );
 
     if (!confirmed) {
@@ -559,6 +575,7 @@ export default function ChatWindow({
   useEffect(() => {
     setLocalState({});
     setHiddenMessageIds(new Set());
+    setLocalReactions({});
     setActionError(null);
     setChatMenuOpen(false);
     setMessageMenuId(null);
@@ -692,67 +709,6 @@ export default function ChatWindow({
 
   return (
     <div className="flex h-full flex-1 flex-col bg-[#efeae2]">
-      <header className="flex shrink-0 items-center justify-between border-b border-[#d1d7db] bg-[#f0f2f5] px-3 py-2 md:hidden">
-        <div className="flex min-w-0 items-center gap-2">
-          <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#dfe5e7] text-sm font-bold text-[#54656f]">
-            {getInitial(contact)}
-
-            <span
-              className={[
-                "absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-[#f0f2f5]",
-                currentBlocked
-                  ? "bg-red-500"
-                  : contact.ai_enabled
-                    ? "bg-[#00a884]"
-                    : "bg-[#8696a0]",
-              ].join(" ")}
-            />
-          </div>
-
-          <div className="min-w-0">
-            <h2 className="truncate text-sm font-black text-[#111b21]">
-              {displayName(contact)}
-            </h2>
-
-            <p className="truncate text-[11px] text-[#667781]">
-              {currentBlocked
-                ? "Blocked"
-                : currentNeedsHuman
-                  ? "Needs human attention"
-                  : contact.phone}
-            </p>
-          </div>
-        </div>
-
-        <div className="relative flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={onToggleAi}
-            disabled={currentBlocked}
-            className={[
-              "rounded-full px-3 py-1.5 text-xs font-black transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50",
-              contact.ai_enabled && !currentBlocked
-                ? "bg-[#d9fdd3] text-[#008069]"
-                : "bg-[#e9edef] text-[#54656f]",
-            ].join(" ")}
-          >
-            AI {contact.ai_enabled && !currentBlocked ? "ON" : "OFF"}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setChatMenuOpen((open) => !open)}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-[#54656f] transition hover:bg-[#e9edef]"
-            title="Chat options"
-            aria-label="Chat options"
-          >
-            ⋮
-          </button>
-
-          {chatMenuOpen ? chatMenu : null}
-        </div>
-      </header>
-
       <header className="hidden shrink-0 items-center justify-between border-b border-[#d1d7db] bg-[#f0f2f5] px-4 py-2.5 md:flex">
         <div className="flex min-w-0 items-center gap-3">
           <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#dfe5e7] text-base font-bold text-[#54656f]">
@@ -835,7 +791,7 @@ export default function ChatWindow({
       ) : null}
 
       {currentNeedsHuman ? (
-        <div className="shrink-0 border-b border-red-200 bg-red-50 px-4 py-2 text-xs leading-5 text-red-800">
+        <div className="hidden shrink-0 border-b border-red-200 bg-red-50 px-4 py-2 text-xs leading-5 text-red-800 md:block">
           <span className="font-black">Needs human attention.</span>{" "}
           {currentHumanReason ||
             "This customer should be reviewed by the team manually."}
@@ -843,7 +799,7 @@ export default function ChatWindow({
       ) : null}
 
       {currentBlocked ? (
-        <div className="shrink-0 border-b border-red-200 bg-red-50 px-4 py-2 text-xs leading-5 text-red-800">
+        <div className="hidden shrink-0 border-b border-red-200 bg-red-50 px-4 py-2 text-xs leading-5 text-red-800 md:block">
           <span className="font-black">Blocked customer.</span> AI replies are
           off. Be careful before sending manual messages.
         </div>
@@ -872,7 +828,11 @@ export default function ChatWindow({
         <div
           ref={scrollContainerRef}
           onScroll={handleScroll}
-          className="h-full overflow-y-auto bg-[#efeae2] px-3 py-3 md:px-8 md:py-4"
+          onClick={() => {
+            setMessageMenuId(null);
+            setChatMenuOpen(false);
+          }}
+          className="h-full overflow-y-auto bg-[#efeae2] px-2 py-3 md:px-8 md:py-4"
         >
           {shouldShowFullLoading ? (
             <div className="flex h-full items-center justify-center text-center">
@@ -911,6 +871,7 @@ export default function ChatWindow({
                 const hasMedia = Boolean(message.media_url);
                 const type = normalizeMessageType(message);
                 const messageBusy = busyAction === `message:${message.id}`;
+                const localReaction = localReactions[message.id];
 
                 return (
                   <div key={message.id}>
@@ -945,7 +906,13 @@ export default function ChatWindow({
                         ].join(" ")}
                       >
                         {!isSystem ? (
-                          <div className="absolute right-1 top-1">
+                          <div
+                            className={[
+                              "absolute top-1",
+                              outbound ? "left-1" : "right-1",
+                            ].join(" ")}
+                            onClick={(event) => event.stopPropagation()}
+                          >
                             <button
                               type="button"
                               onClick={() =>
@@ -953,7 +920,7 @@ export default function ChatWindow({
                                   current === message.id ? null : message.id
                                 )
                               }
-                              className="flex h-6 w-6 items-center justify-center rounded-full text-[#667781] opacity-0 transition hover:bg-black/5 group-hover:opacity-100"
+                              className="flex h-7 w-7 items-center justify-center rounded-full bg-white/70 text-[#667781] opacity-100 shadow-sm transition hover:bg-black/5 md:bg-transparent md:opacity-0 md:shadow-none md:group-hover:opacity-100"
                               title="Message options"
                               aria-label="Message options"
                             >
@@ -961,17 +928,60 @@ export default function ChatWindow({
                             </button>
 
                             {messageMenuId === message.id ? (
-                              <div className="absolute right-0 top-7 z-30 w-40 overflow-hidden rounded-xl border border-[#d1d7db] bg-white text-xs shadow-xl">
+                              <div
+                                className={[
+                                  "absolute top-8 z-30 w-56 overflow-hidden rounded-2xl border border-[#d1d7db] bg-white text-xs shadow-2xl",
+                                  outbound ? "left-0" : "right-0",
+                                ].join(" ")}
+                              >
+                                <div className="border-b border-[#e9edef] p-2">
+                                  <p className="mb-2 px-1 text-[10px] font-black uppercase tracking-wide text-[#667781]">
+                                    React locally
+                                  </p>
+
+                                  <div className="flex items-center gap-1">
+                                    {QUICK_REACTIONS.map((reaction) => (
+                                      <button
+                                        key={reaction}
+                                        type="button"
+                                        onClick={() =>
+                                          setReaction(message.id, reaction)
+                                        }
+                                        className="flex h-8 w-8 items-center justify-center rounded-full text-lg transition hover:bg-[#f0f2f5]"
+                                      >
+                                        {reaction}
+                                      </button>
+                                    ))}
+                                  </div>
+
+                                  {localReaction ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => removeReaction(message.id)}
+                                      className="mt-2 block w-full rounded-lg px-2 py-1.5 text-left font-bold text-[#54656f] transition hover:bg-[#f5f6f6]"
+                                    >
+                                      Remove reaction
+                                    </button>
+                                  ) : null}
+                                </div>
+
                                 <button
                                   type="button"
                                   disabled={messageBusy}
                                   onClick={() =>
                                     void deleteSingleMessage(message.id)
                                   }
-                                  className="block w-full px-3 py-2 text-left font-black text-red-700 transition hover:bg-red-50 disabled:opacity-50"
+                                  className="block w-full px-3 py-3 text-left font-black text-red-700 transition hover:bg-red-50 disabled:opacity-50"
                                 >
-                                  {messageBusy ? "Deleting..." : "Delete message"}
+                                  {messageBusy
+                                    ? "Deleting..."
+                                    : "Delete from inbox"}
                                 </button>
+
+                                <p className="border-t border-[#e9edef] px-3 py-2 text-[10px] leading-4 text-[#667781]">
+                                  WhatsApp API cannot delete already delivered
+                                  messages from the customer’s phone.
+                                </p>
                               </div>
                             ) : null}
                           </div>
@@ -980,7 +990,8 @@ export default function ChatWindow({
                         {senderLabel ? (
                           <span
                             className={[
-                              "mb-1 block pr-6 text-[10px] font-bold uppercase tracking-wide",
+                              "mb-1 block text-[10px] font-bold uppercase tracking-wide",
+                              outbound ? "pl-6" : "pr-6",
                               message.sender_type === "ai"
                                 ? "text-[#008069]"
                                 : message.sender_type === "admin"
@@ -1022,6 +1033,17 @@ export default function ChatWindow({
                           {timeLabel ? <span>{timeLabel}</span> : null}
                           {statusLabel ? <span>· {statusLabel}</span> : null}
                         </div>
+
+                        {localReaction ? (
+                          <div
+                            className={[
+                              "absolute -bottom-3 flex h-6 min-w-6 items-center justify-center rounded-full border border-[#d1d7db] bg-white px-1 text-sm shadow-sm",
+                              outbound ? "left-2" : "right-2",
+                            ].join(" ")}
+                          >
+                            {localReaction}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   </div>

@@ -487,7 +487,7 @@ export default function InboxClient({
   }
 
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-[#efeae2] text-[#111b21]">
+    <div className="flex h-[100svh] max-h-[100svh] overflow-hidden bg-[#efeae2] text-[#111b21]">
       <aside
         className={[
           "h-full shrink-0 border-r border-[#d1d7db] bg-white",
@@ -495,77 +495,108 @@ export default function InboxClient({
           selected ? "hidden md:block" : "block",
         ].join(" ")}
       >
-        <div className="flex h-full flex-col">
+        <div className="flex h-full min-h-0 flex-col">
           {loadError ? (
-            <div className="border-b border-red-200 bg-red-50 px-4 py-3 text-xs leading-5 text-red-700">
+            <div className="shrink-0 border-b border-red-200 bg-red-50 px-4 py-3 text-xs leading-5 text-red-700">
               {loadError}
             </div>
           ) : null}
 
           {loadingContacts && contacts.length === 0 ? (
-            <div className="border-b border-[#e9edef] bg-[#f0f2f5] px-4 py-3 text-xs text-[#667781]">
+            <div className="shrink-0 border-b border-[#e9edef] bg-[#f0f2f5] px-4 py-3 text-xs text-[#667781]">
               Loading WhatsApp conversations...
             </div>
           ) : null}
 
-          <ChatList
-            contacts={contacts}
-            selectedId={selectedId}
-            filter={filter}
-            search={search}
-            onFilterChange={setFilter}
-            onSearchChange={setSearch}
-            onSelect={handleSelectContact}
-          />
+          <div className="min-h-0 flex-1">
+            <ChatList
+              contacts={contacts}
+              selectedId={selectedId}
+              filter={filter}
+              search={search}
+              onFilterChange={setFilter}
+              onSearchChange={setSearch}
+              onSelect={handleSelectContact}
+            />
+          </div>
         </div>
       </aside>
 
       <main
         className={[
           "min-w-0 flex-1 flex-col bg-[#efeae2]",
-          selected ? "flex" : "hidden md:flex",
+          selected
+            ? "fixed inset-0 z-50 flex h-[100svh] max-h-[100svh] md:relative md:inset-auto md:z-auto"
+            : "hidden md:flex",
         ].join(" ")}
       >
-        {messageError ? (
-          <div className="border-b border-red-200 bg-red-50 px-4 py-3 text-xs leading-5 text-red-700">
+        {selected ? (
+          <div className="shrink-0 border-b border-[#d1d7db] bg-[#f0f2f5]">
+            {messageError ? (
+              <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs leading-5 text-red-700">
+                {messageError}
+              </div>
+            ) : null}
+
+            <div className="flex h-14 items-center gap-3 px-2 md:hidden">
+              <button
+                type="button"
+                onClick={() => void handleBackToInbox()}
+                className="flex h-10 w-10 items-center justify-center rounded-full text-3xl leading-none text-[#111b21] hover:bg-[#e9edef]"
+                aria-label="Back to chats"
+              >
+                ‹
+              </button>
+
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#dfe5e7] text-sm font-bold text-[#54656f]">
+                {(selected.name || selected.profile_name || selected.phone || "?")
+                  .slice(0, 1)
+                  .toUpperCase()}
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-base font-semibold text-[#111b21]">
+                  {selected.name || selected.profile_name || selected.phone}
+                </p>
+                <p
+                  className={[
+                    "truncate text-xs",
+                    selectedBlocked || selectedNeedsHumanAttention
+                      ? "font-bold text-red-600"
+                      : "text-[#667781]",
+                  ].join(" ")}
+                >
+                  {selectedBlocked
+                    ? "Blocked"
+                    : selectedNeedsHumanAttention
+                      ? "Needs human attention"
+                      : `AI ${selected.ai_enabled ? "on" : "off"}`}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void handleToggleAi()}
+                disabled={selectedBlocked}
+                className={[
+                  "shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold",
+                  selected.ai_enabled
+                    ? "bg-[#d9fdd3] text-[#008069]"
+                    : "bg-white text-[#54656f]",
+                  selectedBlocked ? "opacity-50" : "",
+                ].join(" ")}
+              >
+                AI {selected.ai_enabled ? "ON" : "OFF"}
+              </button>
+            </div>
+          </div>
+        ) : messageError ? (
+          <div className="shrink-0 border-b border-red-200 bg-red-50 px-4 py-3 text-xs leading-5 text-red-700">
             {messageError}
           </div>
         ) : null}
 
-        {selected ? (
-          <div className="flex items-center gap-3 border-b border-[#d1d7db] bg-[#f0f2f5] px-3 py-2 md:hidden">
-            <button
-              type="button"
-              onClick={() => void handleBackToInbox()}
-              className="flex h-9 w-9 items-center justify-center rounded-full text-xl font-semibold text-[#54656f] hover:bg-[#e9edef]"
-              aria-label="Back to chats"
-            >
-              ‹
-            </button>
-
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-[#111b21]">
-                {selected.name || selected.profile_name || selected.phone}
-              </p>
-              <p
-                className={[
-                  "text-xs",
-                  selectedBlocked || selectedNeedsHumanAttention
-                    ? "font-bold text-red-600"
-                    : "text-[#667781]",
-                ].join(" ")}
-              >
-                {selectedBlocked
-                  ? "Blocked"
-                  : selectedNeedsHumanAttention
-                    ? "Needs human attention"
-                    : `AI ${selected.ai_enabled ? "on" : "off"}`}
-              </p>
-            </div>
-          </div>
-        ) : null}
-
-        <div className="min-h-0 flex-1">
+        <div className="min-h-0 flex-1 overflow-hidden">
           <ChatWindow
             contact={selected}
             messages={messages}
@@ -574,15 +605,17 @@ export default function InboxClient({
           />
         </div>
 
-        <MessageComposer
-          disabled={!selected}
-          quickReplies={quickReplies}
-          onSend={handleSend}
-          onAiSuggest={handleAiSuggest}
-          onSendMedia={handleSendMedia}
-          blocked={selectedBlocked}
-          needsHumanAttention={selectedNeedsHumanAttention}
-        />
+        <div className="shrink-0 border-t border-[#d1d7db] bg-[#f0f2f5] pb-[max(env(safe-area-inset-bottom),0px)]">
+          <MessageComposer
+            disabled={!selected}
+            quickReplies={quickReplies}
+            onSend={handleSend}
+            onAiSuggest={handleAiSuggest}
+            onSendMedia={handleSendMedia}
+            blocked={selectedBlocked}
+            needsHumanAttention={selectedNeedsHumanAttention}
+          />
+        </div>
       </main>
 
       {!selected ? (

@@ -18,17 +18,9 @@ function detectAttachmentType(file: File): SelectedAttachment["type"] {
   const mimeType = (file.type || "").toLowerCase();
   const fileName = (file.name || "").toLowerCase();
 
-  if (mimeType.startsWith("image/")) {
-    return "image";
-  }
-
-  if (mimeType.startsWith("video/")) {
-    return "video";
-  }
-
-  if (mimeType.startsWith("audio/")) {
-    return "audio";
-  }
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
 
   if (
     fileName.endsWith(".jpg") ||
@@ -80,19 +72,10 @@ function formatFileSize(bytes: number) {
 }
 
 function getAttachmentIcon(type: SelectedAttachment["type"]) {
-  if (type === "image") {
-    return "📷";
-  }
-
-  if (type === "video") {
-    return "🎥";
-  }
-
-  if (type === "audio") {
-    return "🎧";
-  }
-
-  return "📎";
+  if (type === "image") return "📷";
+  if (type === "video") return "🎥";
+  if (type === "audio") return "🎧";
+  return "📄";
 }
 
 export default function MessageComposer({
@@ -170,12 +153,10 @@ export default function MessageComposer({
   useEffect(() => {
     const textarea = textareaRef.current;
 
-    if (!textarea) {
-      return;
-    }
+    if (!textarea) return;
 
     textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 130)}px`;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 116)}px`;
   }, [text]);
 
   useEffect(() => {
@@ -205,9 +186,7 @@ export default function MessageComposer({
 
     setError(null);
 
-    if (!file) {
-      return;
-    }
+    if (!file) return;
 
     const attachmentType = detectAttachmentType(file);
     const previewUrl =
@@ -231,9 +210,7 @@ export default function MessageComposer({
   }
 
   async function handleSend() {
-    if (!canSend) {
-      return;
-    }
+    if (!canSend) return;
 
     if (blocked) {
       setError("This customer is blocked. Unblock them before sending.");
@@ -245,9 +222,7 @@ export default function MessageComposer({
         "This chat is marked as needing human attention. Send this message anyway?"
       );
 
-      if (!confirmed) {
-        return;
-      }
+      if (!confirmed) return;
     }
 
     setSending(true);
@@ -289,9 +264,7 @@ export default function MessageComposer({
   }
 
   async function handleSuggest() {
-    if (fullyDisabled || suggesting || attachment) {
-      return;
-    }
+    if (fullyDisabled || suggesting || attachment) return;
 
     setSuggesting(true);
     setError(null);
@@ -329,16 +302,14 @@ export default function MessageComposer({
   }
 
   function handleAttachmentClick() {
-    if (fullyDisabled || sending) {
-      return;
-    }
+    if (fullyDisabled || sending) return;
 
     setError(null);
     fileInputRef.current?.click();
   }
 
   return (
-    <div className="border-t border-[#d1d7db] bg-[#f0f2f5] px-2 py-2 md:px-4">
+    <div className="bg-[#f0f2f5] px-2 py-2">
       <input
         ref={fileInputRef}
         type="file"
@@ -354,7 +325,7 @@ export default function MessageComposer({
           customer before sending manual messages.
         </div>
       ) : needsHumanAttention ? (
-        <div className="mb-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
+        <div className="mb-2 hidden rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700 md:block">
           <span className="font-black">Needs human attention.</span> This chat
           should be handled manually. AI auto-reply should stay off until you
           give the chat back to AI.
@@ -368,7 +339,7 @@ export default function MessageComposer({
       ) : null}
 
       {attachment ? (
-        <div className="mb-2 overflow-hidden rounded-2xl border border-[#d1d7db] bg-white shadow-xl">
+        <div className="mb-2 overflow-hidden rounded-2xl border border-[#d1d7db] bg-white shadow-lg">
           <div className="flex items-start gap-3 p-3">
             <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-[#f0f2f5] text-2xl">
               {attachment.type === "image" && attachment.previewUrl ? (
@@ -400,7 +371,7 @@ export default function MessageComposer({
               </p>
 
               <p className="mt-1 text-xs leading-5 text-[#667781]">
-                Add a caption below or press Send to send only the file.
+                Add a caption or send the file directly.
               </p>
             </div>
 
@@ -408,7 +379,8 @@ export default function MessageComposer({
               type="button"
               onClick={clearAttachment}
               disabled={sending}
-              className="rounded-full px-2 py-1 text-xs font-black text-[#667781] transition hover:bg-[#f0f2f5] hover:text-[#111b21] disabled:cursor-not-allowed disabled:opacity-40"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-sm font-black text-[#667781] transition hover:bg-[#f0f2f5] hover:text-[#111b21] disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label="Remove attachment"
             >
               ✕
             </button>
@@ -417,7 +389,7 @@ export default function MessageComposer({
       ) : null}
 
       {showQuickReplies ? (
-        <div className="mb-2 max-h-52 overflow-y-auto rounded-2xl border border-[#d1d7db] bg-white p-2 shadow-xl">
+        <div className="mb-2 max-h-56 overflow-y-auto rounded-2xl border border-[#d1d7db] bg-white p-2 shadow-xl">
           <div className="mb-2 flex items-center justify-between px-2">
             <p className="text-xs font-bold uppercase tracking-wide text-[#667781]">
               Quick replies
@@ -435,8 +407,7 @@ export default function MessageComposer({
           {quickReplies.length === 0 ? (
             <div className="rounded-xl bg-[#f0f2f5] px-3 py-4 text-center">
               <p className="text-xs leading-5 text-[#667781]">
-                No quick replies yet. Later we can add saved replies for prices,
-                license requirements and booking instructions.
+                No quick replies yet.
               </p>
             </div>
           ) : (
@@ -461,59 +432,61 @@ export default function MessageComposer({
         </div>
       ) : null}
 
-      <div className="flex items-end gap-2">
+      <div className="flex items-end gap-1.5 md:gap-2">
         <button
           type="button"
           disabled={fullyDisabled || Boolean(attachment)}
           title="Quick replies"
           onClick={() => setShowQuickReplies((value) => !value)}
-          className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xl text-[#54656f] transition hover:bg-[#e9edef] disabled:cursor-not-allowed disabled:opacity-40 md:h-11 md:w-11"
+          className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[20px] text-[#54656f] transition hover:bg-[#e9edef] disabled:cursor-not-allowed disabled:opacity-40"
+          aria-label="Quick replies"
         >
           ⚡
         </button>
 
-        <button
-          type="button"
-          disabled={fullyDisabled || sending}
-          title="Attach image, video or file"
-          onClick={handleAttachmentClick}
-          className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xl text-[#54656f] transition hover:bg-[#e9edef] disabled:cursor-not-allowed disabled:opacity-40 md:h-11 md:w-11"
-        >
-          📎
-        </button>
+        <div className="min-w-0 flex-1 rounded-[24px] bg-white px-2 py-1.5 shadow-sm">
+          <div className="flex items-end gap-1">
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={(event) => {
+                setText(event.target.value);
 
-        <div className="min-w-0 flex-1 rounded-3xl bg-white px-4 py-2 shadow-sm">
-          <textarea
-            ref={textareaRef}
-            value={text}
-            onChange={(event) => {
-              setText(event.target.value);
+                if (error) setError(null);
+              }}
+              disabled={fullyDisabled || sending}
+              placeholder={
+                blocked
+                  ? "Customer is blocked"
+                  : disabled
+                    ? "Select a chat"
+                    : attachment
+                      ? "Add a caption"
+                      : suggesting
+                        ? "Generating..."
+                        : "Message"
+              }
+              rows={1}
+              className="max-h-28 min-h-[28px] flex-1 resize-none bg-transparent px-2 py-1 text-[15px] leading-6 text-[#111b21] outline-none placeholder:text-[#667781] disabled:cursor-not-allowed"
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void handleSend();
+                }
+              }}
+            />
 
-              if (error) {
-                setError(null);
-              }
-            }}
-            disabled={fullyDisabled || sending}
-            placeholder={
-              blocked
-                ? "Customer is blocked"
-                : disabled
-                  ? "Select a chat to reply"
-                  : attachment
-                    ? "Add a caption"
-                    : suggesting
-                      ? "Generating AI suggestion..."
-                      : "Type a message"
-            }
-            rows={1}
-            className="max-h-32 min-h-[28px] w-full resize-none bg-transparent py-1 text-sm leading-6 text-[#111b21] outline-none placeholder:text-[#667781] disabled:cursor-not-allowed"
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void handleSend();
-              }
-            }}
-          />
+            <button
+              type="button"
+              disabled={fullyDisabled || sending}
+              title="Attach image, video or file"
+              onClick={handleAttachmentClick}
+              className="mb-[1px] flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[22px] text-[#54656f] transition hover:bg-[#e9edef] disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label="Attach file"
+            >
+              📎
+            </button>
+          </div>
         </div>
 
         <button
@@ -521,43 +494,20 @@ export default function MessageComposer({
           disabled={fullyDisabled || suggesting || Boolean(attachment)}
           onClick={() => void handleSuggest()}
           title="Generate AI reply suggestion"
-          className="mb-0.5 hidden h-10 shrink-0 items-center justify-center rounded-full bg-[#e7fce3] px-4 text-xs font-black text-[#008069] transition hover:bg-[#d9fdd3] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 sm:flex md:h-11"
+          className="mb-0.5 hidden h-10 shrink-0 items-center justify-center rounded-full bg-[#e7fce3] px-3 text-xs font-black text-[#008069] transition hover:bg-[#d9fdd3] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 md:flex"
         >
-          {suggesting ? "AI..." : "AI Suggest"}
-        </button>
-
-        <button
-          type="button"
-          disabled={fullyDisabled || suggesting || Boolean(attachment)}
-          onClick={() => void handleSuggest()}
-          title="Generate AI reply suggestion"
-          className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#e7fce3] text-xs font-black text-[#008069] transition hover:bg-[#d9fdd3] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 sm:hidden md:h-11 md:w-11"
-        >
-          {suggesting ? "…" : "AI"}
+          {suggesting ? "AI..." : "AI"}
         </button>
 
         <button
           type="button"
           disabled={!canSend}
           onClick={() => void handleSend()}
-          className="mb-0.5 flex h-10 shrink-0 items-center justify-center rounded-full bg-[#00a884] px-4 text-sm font-black text-white transition hover:bg-[#008f72] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 md:h-11 md:px-5"
+          className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#00a884] text-xl font-black text-white shadow-sm transition hover:bg-[#008f72] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 md:w-auto md:px-5 md:text-sm"
+          aria-label={attachment ? "Send file" : "Send message"}
         >
-          {sending ? "..." : attachment ? "Send file" : "Send"}
+          {sending ? "…" : attachment ? "➤" : "➤"}
         </button>
-      </div>
-
-      <div className="mt-1 flex items-center justify-between gap-3 px-2">
-        <p className="hidden text-[10px] text-[#667781] sm:block">
-          {attachment
-            ? "Enter to send file · Shift + Enter for caption line"
-            : "Enter to send · Shift + Enter for new line"}
-        </p>
-
-        {text.length > 0 ? (
-          <p className="ml-auto text-[10px] text-[#667781]">
-            {text.length} chars
-          </p>
-        ) : null}
       </div>
     </div>
   );
